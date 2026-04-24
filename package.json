@@ -11,7 +11,10 @@
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
 		"lint": "prettier --check . && eslint .",
-		"format": "prettier --write ."
+		"format": "prettier --write .",
+		"terminals:status": "bun scripts/terminals-status.ts",
+		"terminals:sections": "bun scripts/terminals-status.ts --list-sections",
+		"terminals:check": "bun scripts/terminals-status.ts --strict"
 	},
 	"devDependencies": {
 		"@eslint/compat": "^2.0.4",
