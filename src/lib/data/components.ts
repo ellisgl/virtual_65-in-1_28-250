@@ -44,23 +44,23 @@ const model1N5233: DeviceModel = {
 };
 
 const resistors: KitComponent[] = [
-	{ id: 'R1', kind: 'resistor', name: '100 ohm', terminals: [1, 2], value: 100, unit: 'ohm' },
-	{ id: 'R2', kind: 'resistor', name: '470 ohm', terminals: [3, 4], value: 470, unit: 'ohm' },
-	{ id: 'R3', kind: 'resistor', name: '1 kohm', terminals: [5, 6], value: 1000, unit: 'ohm' },
-	{ id: 'R4', kind: 'resistor', name: '2.2 kohm', terminals: [7, 8], value: 2200, unit: 'ohm' },
-	{ id: 'R5', kind: 'resistor', name: '4.7 kohm', terminals: [9, 10], value: 4700, unit: 'ohm' },
-	{ id: 'R6', kind: 'resistor', name: '10 kohm', terminals: [11, 12], value: 10000, unit: 'ohm' },
-	{ id: 'R7', kind: 'resistor', name: '22 kohm', terminals: [13, 14], value: 22000, unit: 'ohm' },
-	{ id: 'R8', kind: 'resistor', name: '47 kohm', terminals: [15, 16], value: 47000, unit: 'ohm' },
-	{ id: 'R9', kind: 'resistor', name: '100 kohm', terminals: [17, 18], value: 100000, unit: 'ohm' },
+	{ id: 'R1',  kind: 'resistor', name: '100 ohm',  terminals: [1, 2],   value: 100,    unit: 'ohm' },
+	{ id: 'R2',  kind: 'resistor', name: '470 ohm',  terminals: [3, 4],   value: 470,    unit: 'ohm' },
+	{ id: 'R3',  kind: 'resistor', name: '1 kohm',   terminals: [5, 6],   value: 1000,   unit: 'ohm' },
+	{ id: 'R4',  kind: 'resistor', name: '2.2 kohm', terminals: [7, 8],   value: 2200,   unit: 'ohm' },
+	{ id: 'R5',  kind: 'resistor', name: '4.7 kohm', terminals: [9, 10],  value: 4700,   unit: 'ohm' },
+	{ id: 'R6',  kind: 'resistor', name: '10 kohm',  terminals: [11, 12], value: 10000,  unit: 'ohm' },
+	{ id: 'R7',  kind: 'resistor', name: '22 kohm',  terminals: [13, 14], value: 22000,  unit: 'ohm' },
+	{ id: 'R8',  kind: 'resistor', name: '47 kohm',  terminals: [15, 16], value: 47000,  unit: 'ohm' },
+	{ id: 'R9',  kind: 'resistor', name: '100 kohm', terminals: [17, 18], value: 100000, unit: 'ohm' },
 	{ id: 'R10', kind: 'resistor', name: '220 kohm', terminals: [19, 20], value: 220000, unit: 'ohm' }
 ];
 
 const capacitors: KitComponent[] = [
-	{ id: 'C1', kind: 'capacitor', name: '100 pF', terminals: [24, 25], value: 100e-12, unit: 'F' },
-	{ id: 'C2', kind: 'capacitor', name: '0.02 uF', terminals: [26, 27], value: 20e-9, unit: 'F' },
-	{ id: 'C3', kind: 'capacitor', name: '0.05 uF', terminals: [28, 29], value: 50e-9, unit: 'F' },
-	{ id: 'C4', kind: 'capacitor', name: '0.1 uF', terminals: [30, 31], value: 100e-9, unit: 'F' },
+	{ id: 'C1', kind: 'capacitor', name: '100 pF',  terminals: [24, 25], value: 100e-12, unit: 'F' },
+	{ id: 'C2', kind: 'capacitor', name: '0.02 uF', terminals: [26, 27], value: 20e-9,   unit: 'F' },
+	{ id: 'C3', kind: 'capacitor', name: '0.05 uF', terminals: [28, 29], value: 50e-9,   unit: 'F' },
+	{ id: 'C4', kind: 'capacitor', name: '0.1 uF',  terminals: [30, 31], value: 100e-9,  unit: 'F' },
 	{
 		id: 'C5',
 		kind: 'capacitor',
