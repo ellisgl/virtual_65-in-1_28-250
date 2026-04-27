@@ -98,15 +98,15 @@ TERMINAL_POSITIONS[63]  = { x: 175, y: 245 };
 
 // Solar Battery (Cell)
 TERMINAL_POSITIONS[64]  = { x: 220, y: 57  };
-TERMINAL_POSITIONS[65]  = { x: 225, y: 57  };
+TERMINAL_POSITIONS[65]  = { x: 256, y: 57  };
 
-// Cds Cell
+// CdS Cell
 TERMINAL_POSITIONS[66]  = { x: 289, y: 57  };
 TERMINAL_POSITIONS[67]  = { x: 310, y: 57  };
 
 // Signal Lamp
 TERMINAL_POSITIONS[68]  = { x: 334, y: 57  };
-TERMINAL_POSITIONS[69]  = { x: 366, y: 57  };
+TERMINAL_POSITIONS[69]  = { x: 368, y: 57  };
 
 // Transformer
 TERMINAL_POSITIONS[70]  = { x: 224, y: 78  };
