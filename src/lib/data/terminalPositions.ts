@@ -143,5 +143,5 @@ TERMINAL_POSITIONS[88]  = { x: 220, y: 226 };
 TERMINAL_POSITIONS[89]  = { x: 220, y: 243 };
 
 // Speaker
-TERMINAL_POSITIONS[90]  = { x: 317, y: 184 };
+TERMINAL_POSITIONS[90]  = { x: 	317, y: 184 };
 TERMINAL_POSITIONS[91]  = { x: 357, y: 184 };
