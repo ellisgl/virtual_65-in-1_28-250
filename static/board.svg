@@ -26,14 +26,14 @@
      inkscape:document-units="mm"
      showguides="true"
      inkscape:zoom="2.360978"
-     inkscape:cx="511.01705"
-     inkscape:cy="48.496853"
-     inkscape:window-width="1600"
-     inkscape:window-height="840"
+     inkscape:cx="0.84710658"
+     inkscape:cy="414.44689"
+     inkscape:window-width="1920"
+     inkscape:window-height="1020"
      inkscape:window-x="0"
      inkscape:window-y="0"
      inkscape:window-maximized="1"
-     inkscape:current-layer="layer1"
+     inkscape:current-layer="g124"
      showgrid="false"
      inkscape:lockguides="false">
     <sodipodi:guide
@@ -126,10 +126,29 @@
        id="guide145"
        inkscape:locked="false" />
     <sodipodi:guide
-       position="115.20296,255.17401"
-       orientation="0,-1"
+       position="353.50001,241.6"
+       orientation="0,1"
        id="guide146"
+       inkscape:locked="false"
+       inkscape:label=""
+       inkscape:color="rgb(0,134,229)" />
+    <sodipodi:guide
+       position="9.9178062,287.83631"
+       orientation="1,0"
+       id="guide1"
        inkscape:locked="false" />
+    <sodipodi:guide
+       position="13.935901,283.81822"
+       orientation="0,-1"
+       id="guide2"
+       inkscape:locked="false" />
+    <sodipodi:guide
+       position="353.50001,241.6"
+       orientation="-1,0"
+       id="guide3"
+       inkscape:locked="false"
+       inkscape:label=""
+       inkscape:color="rgb(0,134,229)" />
   </sodipodi:namedview>
   <defs
      id="defs1">
@@ -158,7 +177,7 @@
        id="rect2" />
   </defs>
   <g
-     inkscape:label="Carboard"
+     inkscape:label="Cardboard"
      inkscape:groupmode="layer"
      id="layer1"
      style="fill:#ff0000">
@@ -2224,7 +2243,7 @@
        id="text89"><tspan
          sodipodi:role="line"
          id="tspan89"
-         style="stroke-width:0.5"></tspan></text>
+         style="stroke-width:0.5" /></text>
     <text
        xml:space="preserve"
        style="font-style:normal;font-variant:normal;font-weight:bold;font-stretch:normal;font-size:3.52777px;font-family:'Noto Sans';-inkscape-font-specification:'Noto Sans Bold';text-align:end;writing-mode:lr-tb;direction:ltr;text-anchor:end;opacity:0.98;fill:#000000;stroke:none;stroke-width:0.499999;stroke-dasharray:none;stroke-opacity:1"
@@ -2333,7 +2352,7 @@
        id="text120"><tspan
          sodipodi:role="line"
          id="tspan120"
-         style="stroke-width:0.5"></tspan></text>
+         style="stroke-width:0.5" /></text>
     <text
        xml:space="preserve"
        style="font-style:normal;font-variant:normal;font-weight:bold;font-stretch:normal;font-size:3.52777px;font-family:'Noto Sans';-inkscape-font-specification:'Noto Sans Bold';text-align:end;writing-mode:lr-tb;direction:ltr;text-anchor:end;opacity:0.98;fill:#000000;stroke:none;stroke-width:0.499999;stroke-dasharray:none;stroke-opacity:1"
@@ -2353,7 +2372,7 @@
        id="text122"><tspan
          sodipodi:role="line"
          id="tspan122"
-         style="stroke-width:0.5"></tspan></text>
+         style="stroke-width:0.5" /></text>
     <text
        xml:space="preserve"
        style="font-style:normal;font-variant:normal;font-weight:bold;font-stretch:normal;font-size:3.52777px;font-family:'Noto Sans';-inkscape-font-specification:'Noto Sans Bold';text-align:start;writing-mode:lr-tb;direction:ltr;text-anchor:start;opacity:0.98;fill:#000000;stroke:none;stroke-width:0.499999;stroke-dasharray:none;stroke-opacity:1"
@@ -2431,6 +2450,52 @@
          style="font-style:italic;font-variant:normal;font-weight:bold;font-stretch:normal;font-family:'Noto Sans';-inkscape-font-specification:'Noto Sans Bold Italic';stroke-width:0.5"
          x="119.41718"
          y="11.762506">Science Fair</tspan></text>
+    <use
+       x="0"
+       y="0"
+       xlink:href="#g55"
+       id="use128"
+       transform="translate(406.66281,106.2321)" />
+    <use
+       x="0"
+       y="0"
+       xlink:href="#g124"
+       id="use129"
+       transform="translate(367.58782)" />
+    <use
+       x="0"
+       y="0"
+       xlink:href="#g1848"
+       id="use130"
+       transform="translate(313.09358,223.26834)" />
+    <use
+       x="0"
+       y="0"
+       xlink:href="#use130"
+       id="use131"
+       transform="translate(-3.4705885e-6,31.999772)" />
+    <text
+       xml:space="preserve"
+       style="font-style:normal;font-variant:normal;font-weight:bold;font-stretch:normal;font-size:3.52777px;font-family:'Noto Sans';-inkscape-font-specification:'Noto Sans Bold';text-align:start;writing-mode:lr-tb;direction:ltr;text-anchor:start;opacity:0.98;fill:#000000;stroke:none;stroke-width:0.499999;stroke-dasharray:none;stroke-opacity:1"
+       x="239.88257"
+       y="211.3488"
+       id="text133"><tspan
+         sodipodi:role="line"
+         id="tspan133"
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-family:'Noto Sans';-inkscape-font-specification:'Noto Sans';stroke-width:0.5"
+         x="239.88257"
+         y="211.3488">9V</tspan></text>
+    <text
+       xml:space="preserve"
+       style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:3.52777px;font-family:'Noto Sans';-inkscape-font-specification:'Noto Sans';text-align:start;writing-mode:lr-tb;direction:ltr;text-anchor:start;opacity:0.98;fill:#000000;stroke:none;stroke-width:0.499999;stroke-dasharray:none;stroke-opacity:1"
+       x="240.05896"
+       y="243.38408"
+       id="text139"><tspan
+         sodipodi:role="line"
+         id="tspan139"
+         style="stroke-width:0.5"
+         x="240.05896"
+         y="243.38408">3V</tspan></text>
   </g>
   <g
      inkscape:groupmode="layer"
@@ -2900,20 +2965,34 @@
        transform="matrix(0.11480272,0,0,0.11480272,-169.73553,64.421605)"
        inkscape:label="Lamp"
        style="stroke-width:4.3553;stroke-dasharray:none">
-      <path
-         id="path6120"
-         style="opacity:1;fill:none;fill-opacity:1;fill-rule:nonzero;stroke:#000000;stroke-width:4.3553;stroke-linecap:round;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-dashoffset:0;stroke-opacity:1"
-         d="m 1578.8875,-686.64718 v 21 m -28,-21 v 21 m 0,-21 c 0,-7.73199 6.268,-14 14,-14 7.732,0 14,6.26801 14,14"
-         inkscape:connector-curvature="0"
-         sodipodi:nodetypes="cccccsc"
-         inkscape:label="Filament" />
       <circle
          style="opacity:1;fill:none;fill-opacity:1;fill-rule:nonzero;stroke:#000000;stroke-width:4.3553;stroke-linecap:round;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-dashoffset:0;stroke-opacity:1"
          id="circle6124"
          cx="1564.8875"
          cy="-707.64716"
          r="35"
-         inkscape:label="Bulb" />
+         inkscape:label="Bulb_Holder" />
+      <circle
+         style="fill:#501616;fill-opacity:1;fill-rule:nonzero;stroke:none;stroke-width:4.3553;stroke-linecap:round;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-dashoffset:0;stroke-opacity:1"
+         id="circle6124-3"
+         cx="1564.8875"
+         cy="-707.64716"
+         r="35"
+         inkscape:label="Bulb_Off" />
+      <circle
+         style="display:none;fill:#d40000;fill-opacity:1;fill-rule:nonzero;stroke:none;stroke-width:4.3553;stroke-linecap:round;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-dashoffset:0;stroke-opacity:1"
+         id="circle6124-3-1"
+         cx="1564.89"
+         cy="-707.64447"
+         r="35"
+         inkscape:label="Bulb_On" />
+      <circle
+         style="display:none;fill:#d40000;fill-opacity:1;fill-rule:nonzero;stroke:none;stroke-width:4.3553;stroke-linecap:round;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-dashoffset:0;stroke-opacity:1"
+         id="circle2"
+         cx="1564.89"
+         cy="-707.64447"
+         r="35"
+         inkscape:label="Bulb_On" />
     </g>
     <g
        id="g1349"
@@ -2964,13 +3043,24 @@
        style="stroke-width:1.86842;stroke-dasharray:none">
       <g
          id="g123"
-         inkscape:label="Switch"
+         inkscape:label="Switch_Off"
          transform="matrix(0,1,1,0,12869.366,-12897.368)"
-         style="stroke-width:1.86842;stroke-dasharray:none">
+         style="display:inline;stroke-width:1.86842;stroke-dasharray:none">
         <path
            style="opacity:0.98;fill:none;stroke:#000000;stroke-width:1.86842;stroke-dasharray:none;stroke-opacity:1"
            d="m 13211.293,211.39765 -70.232,13.74313 h -52.675 l -0.517,90.88053"
            id="path62"
+           sodipodi:nodetypes="cccc" />
+      </g>
+      <g
+         id="g1"
+         inkscape:label="Switch_On"
+         transform="matrix(0,1,1,0,12869.366,-12897.368)"
+         style="display:none;stroke-width:1.86842;stroke-dasharray:none">
+        <path
+           style="display:inline;opacity:0.98;fill:none;stroke:#000000;stroke-width:1.86842;stroke-dasharray:none;stroke-opacity:1"
+           d="m 13211.293,241.13026 -70.232,-15.98948 h -52.675 l -0.517,90.88053"
+           id="path1"
            sodipodi:nodetypes="cccc" />
       </g>
       <g
@@ -3117,18 +3207,6 @@
          id="path55"
          inkscape:label="Cone" />
     </g>
-    <use
-       x="0"
-       y="0"
-       xlink:href="#g55"
-       id="use128"
-       transform="translate(406.66282,106.2321)" />
-    <use
-       x="0"
-       y="0"
-       xlink:href="#g124"
-       id="use129"
-       transform="translate(367.58783)" />
     <g
        id="g1848"
        transform="matrix(0.21068254,0,0,0.21068254,-168.9059,-106.98964)"
@@ -3171,39 +3249,5 @@
          id="path1480"
          sodipodi:nodetypes="cc" />
     </g>
-    <use
-       x="0"
-       y="0"
-       xlink:href="#g1848"
-       id="use130"
-       transform="translate(313.09357,223.26834)" />
-    <use
-       x="0"
-       y="0"
-       xlink:href="#use130"
-       id="use131"
-       transform="translate(-3.4705886e-6,31.999771)" />
-    <text
-       xml:space="preserve"
-       style="font-style:normal;font-variant:normal;font-weight:bold;font-stretch:normal;font-size:3.52777px;font-family:'Noto Sans';-inkscape-font-specification:'Noto Sans Bold';text-align:start;writing-mode:lr-tb;direction:ltr;text-anchor:start;opacity:0.98;fill:#000000;stroke:none;stroke-width:0.499999;stroke-dasharray:none;stroke-opacity:1"
-       x="239.88257"
-       y="211.3488"
-       id="text133"><tspan
-         sodipodi:role="line"
-         id="tspan133"
-         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-family:'Noto Sans';-inkscape-font-specification:'Noto Sans';stroke-width:0.5"
-         x="239.88257"
-         y="211.3488">9V</tspan></text>
-    <text
-       xml:space="preserve"
-       style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:3.52777px;font-family:'Noto Sans';-inkscape-font-specification:'Noto Sans';text-align:start;writing-mode:lr-tb;direction:ltr;text-anchor:start;opacity:0.98;fill:#000000;stroke:none;stroke-width:0.499999;stroke-dasharray:none;stroke-opacity:1"
-       x="240.05896"
-       y="243.38408"
-       id="text139"><tspan
-         sodipodi:role="line"
-         id="tspan139"
-         style="stroke-width:0.5"
-         x="240.05896"
-         y="243.38408">3V</tspan></text>
   </g>
 </svg>

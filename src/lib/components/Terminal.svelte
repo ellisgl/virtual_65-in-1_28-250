@@ -5,6 +5,8 @@
 		y: number;
 		radius?: number;
 		isDragSource?: boolean;
+		voltage?: number | null;
+		voltageColor?: string;
 		onDragStart?: (terminalId: number, e: PointerEvent) => void;
 		onConnect?: (terminalId: number, e: PointerEvent) => void;
 		onRemove?: (terminalId: number) => void;
@@ -16,6 +18,8 @@
 		y,
 		radius = 1.8,
 		isDragSource = false,
+		voltage = null,
+		voltageColor,
 		onDragStart,
 		onConnect,
 		onRemove
@@ -40,6 +44,7 @@
 <g
 	class="terminal"
 	class:source={isDragSource}
+	style={`--terminal-fill: ${voltageColor ?? '#d4a24f'};`}
 	transform={`translate(${x} ${y})`}
 	role="button"
 	tabindex="0"
@@ -50,7 +55,9 @@
 >
 	<circle class="terminal-hit" r={radius * 1.8} />
 	<circle class="terminal-dot" r={radius} />
-	<title>Terminal {id}</title>
+	<title>
+		Terminal {id}{#if voltage !== null} ({voltage.toFixed(3)} V){/if}
+	</title>
 </g>
 
 <style>
@@ -63,7 +70,7 @@
 	}
 
 	.terminal-dot {
-		fill: #d4a24f;
+		fill: var(--terminal-fill);
 		stroke: #3f2f12;
 		stroke-width: 0.35;
 		transition:

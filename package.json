@@ -14,7 +14,11 @@
 		"format": "prettier --write .",
 		"terminals:status": "bun scripts/terminals-status.ts",
 		"terminals:sections": "bun scripts/terminals-status.ts --list-sections",
-		"terminals:check": "bun scripts/terminals-status.ts --strict"
+		"terminals:check": "bun scripts/terminals-status.ts --strict",
+		"topology:demo": "bun scripts/topology-demo.ts",
+		"runtime:demo": "bun scripts/runtime-demo.ts",
+		"dc:demo": "bun scripts/runtime-demo.ts",
+		"transient:demo": "bun scripts/transient-demo.ts"
 	},
 	"devDependencies": {
 		"@eslint/compat": "^2.0.4",

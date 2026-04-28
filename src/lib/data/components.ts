@@ -238,11 +238,19 @@ const electroMechanical: KitComponent[] = [
 		kind: 'relay',
 		name: 'relay',
 		terminals: [75, 76, 77, 78, 79],
+		metadata: {
+			coilPositive: 75,
+			coilNegative: 78,
+			common: 77,
+			normallyClosed: 76,
+			normallyOpen: 79
+		},
 		model: {
 			name: 'relay-default',
 			type: 'relay',
 			params: {
 				inductance: 1.12,
+				coilResistanceOhms: 150,
 				ron: 0.05,
 				roff: 1_000_000,
 				onCurrent: 0.02,
@@ -253,12 +261,12 @@ const electroMechanical: KitComponent[] = [
 	{
 		id: 'LAMP1',
 		kind: 'lamp',
-		name: 'signal lamp',
+		name: '3.5V 200mA MES bulb',
 		terminals: [68, 69],
 		model: {
 			name: 'lamp-default',
 			type: 'lamp',
-			params: { tempC: 300, nominalVoltage: 6, nominalPower: 0.1 }
+			params: { tempC: 300, nominalVoltage: 3.5, nominalCurrent: 0.2, nominalPower: 0.7 }
 		}
 	},
 	{ id: 'SPK1', kind: 'speaker', name: '8 ohm speaker', terminals: [90, 91], value: 8, unit: 'ohm' }
@@ -305,9 +313,9 @@ const controlsAndSources: KitComponent[] = [
 		kind: 'potentiometer',
 		name: '50 kohm variable resistor',
 		terminals: [21, 22, 23],
-		value: 1000,
+		value: 50000,
 		unit: 'ohm',
-		metadata: { wiper: 22, endA: 21, endB: 23 }
+		metadata: { wiper: 22, endA: 21, endB: 23, defaultPosition: 0.5, rheostatExponent: 5 }
 	},
 	{
 		id: 'BAT9',
