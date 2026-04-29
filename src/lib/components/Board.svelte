@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onDestroy } from 'svelte';
+	import { onDestroy, untrack } from 'svelte';
 	import { KIT_COMPONENTS, KIT_TERMINAL_IDS, TERMINAL_POSITIONS, isTerminalPositionMapped } from '$lib/data';
 	import Terminal from '$lib/components/Terminal.svelte';
 	import VariableKnob from '$lib/components/VariableKnob.svelte';
@@ -21,6 +21,18 @@
 	const LAMP_GLOW_CENTER = { x: 353.5, y: 25.4 };
 	const VARIABLE_RESISTOR_COMPONENT = KIT_COMPONENTS.find((component) => component.id === 'VR1');
 	const VARIABLE_CAPACITOR_COMPONENT = KIT_COMPONENTS.find((component) => component.id === 'VC1');
+	const KEY_COMPONENT = KIT_COMPONENTS.find((component) => component.id === 'KEY1');
+	const VOLTMETER_COMPONENT = KIT_COMPONENTS.find((component) => component.id === 'VM1');
+	const BOARD_VIEWBOX_WIDTH = 437;
+	const BOARD_VIEWBOX_HEIGHT = 267;
+	const METER_DIAL_CENTER = { x: 250.5, y: 162 };
+	const METER_NEEDLE_MIN_ANGLE = -78;
+	const METER_NEEDLE_MAX_ANGLE = 78;
+	const KEY_HITBOX = { x1: 413.5, y1: 242.0, x2: 428.5, y2: 257.0 };
+	const KEY_CENTER = {
+		x: (KEY_HITBOX.x1 + KEY_HITBOX.x2) / 2,
+		y: (KEY_HITBOX.y1 + KEY_HITBOX.y2) / 2
+	};
 	const variableResDefaultPosition = Number(VARIABLE_RESISTOR_COMPONENT?.metadata?.defaultPosition ?? 0.5);
 	const variableCapMin = Number(VARIABLE_CAPACITOR_COMPONENT?.metadata?.min ?? VARIABLE_CAPACITOR_COMPONENT?.value ?? 1e-12);
 	const variableCapMax = Number(VARIABLE_CAPACITOR_COMPONENT?.metadata?.max ?? VARIABLE_CAPACITOR_COMPONENT?.value ?? 265e-12);
@@ -42,10 +54,23 @@
 	let topology = $derived(wiresStore.topology);
 	let variableResistancePosition = $state(variableResDefaultPosition);
 	let variableCapacitance = $state(variableCapDefault);
+	let switchStates = $state<Record<string, boolean>>({});
 	let netlist = $derived(
 		buildSimulationNetlist(topology, KIT_COMPONENTS, {
 			valueOverrides: VARIABLE_CAPACITOR_COMPONENT ? { VC1: variableCapacitance } : {},
-			positionOverrides: VARIABLE_RESISTOR_COMPONENT ? { VR1: variableResistancePosition } : {}
+			positionOverrides: VARIABLE_RESISTOR_COMPONENT ? { VR1: variableResistancePosition } : {},
+			switchStates
+		})
+	);
+	// Only reset transient state when topology/continuous controls change, not momentary key state.
+	let transientResetKey = $derived(
+		JSON.stringify({
+			nodeBindings: topology.componentBindings,
+			terminalToNode: topology.terminalToNode,
+			connectedNodeIds: topology.connectedNodeIds,
+			groundNodeId: topology.groundNodeId,
+			vc1: variableCapacitance,
+			vr1: variableResistancePosition
 		})
 	);
 	let dc = $derived(solveDcNetlist(netlist));
@@ -114,6 +139,36 @@
 	let lampPowerRatio = $derived(
 		typeof lampNominalPower === 'number' && lampNominalPower > 0 ? lampPowerWatts / lampNominalPower : 0
 	);
+	let meterPositiveTerminal = $derived(
+		typeof VOLTMETER_COMPONENT?.metadata?.positive === 'number'
+			? VOLTMETER_COMPONENT.metadata.positive
+			: VOLTMETER_COMPONENT?.terminals[0]
+	);
+	let meterNegativeTerminal = $derived(
+		typeof VOLTMETER_COMPONENT?.metadata?.negative === 'number'
+			? VOLTMETER_COMPONENT.metadata.negative
+			: VOLTMETER_COMPONENT?.terminals[1]
+	);
+	let meterVoltage = $derived(
+		typeof meterPositiveTerminal === 'number' &&
+		typeof meterNegativeTerminal === 'number' &&
+		typeof topology.terminalToNode[meterPositiveTerminal] === 'number' &&
+		typeof topology.terminalToNode[meterNegativeTerminal] === 'number'
+			? (() => {
+				const posNode = topology.terminalToNode[meterPositiveTerminal];
+				const negNode = topology.terminalToNode[meterNegativeTerminal];
+				const vp = activeNodeVoltages[posNode];
+				const vn = activeNodeVoltages[negNode];
+				if (typeof vp !== 'number' || typeof vn !== 'number') return null;
+				return vp - vn;
+			})()
+			: null
+	);
+	let meterClampedVolts = $derived(Math.max(0, Math.min(10, meterVoltage ?? 0)));
+	let meterNeedleAngle = $derived(
+		METER_NEEDLE_MIN_ANGLE +
+			(meterClampedVolts / 10) * (METER_NEEDLE_MAX_ANGLE - METER_NEEDLE_MIN_ANGLE)
+	);
 	let lampGlowOpacity = $derived(
 		(() => {
 			const normalized = Math.max(0, Math.min(1, lampPowerRatio));
@@ -130,9 +185,10 @@
 	);
 
 	$effect(() => {
-		netlist;
+		transientResetKey;
 		stopTransientRun();
-		transientState = initializeTransientState(netlist);
+		const netlistSnapshot = untrack(() => netlist);
+		transientState = initializeTransientState(netlistSnapshot);
 		transientResult = null;
 	});
 
@@ -265,6 +321,9 @@
 		>
 		<span class="netlist-count">{netlist.elements.length} compiled element{netlist.elements.length === 1 ? '' : 's'}</span>
 		<span class="dc-status" class:ok={dc.ok} class:bad={!dc.ok}>DC: {dc.ok ? 'solved' : dc.issue?.code ?? 'not-ready'}</span>
+		{#if VOLTMETER_COMPONENT}
+			<span class="meter-readout">VM1: {meterVoltage === null ? '--' : `${meterVoltage.toFixed(3)} V`}</span>
+		{/if}
 		{#if topology.groundNodeId !== null}
 			<span class="ground">ground node: N{topology.groundNodeId}</span>
 		{/if}
@@ -304,14 +363,14 @@
 		<img src="/board.svg" alt="Science Fair 65-in-1 board artwork" class="board-image" />
 		<svg
 			class="overlay"
-			viewBox="0 0 387 267"
+			viewBox={`0 0 ${BOARD_VIEWBOX_WIDTH} ${BOARD_VIEWBOX_HEIGHT}`}
 			role="application"
 			aria-label="Kit board wiring area"
 			bind:this={overlaySvg}
 			onpointermove={handlePointerMove}
 			onpointerup={handlePointerUp}
 		>
-			<rect width="387" height="267" fill="transparent" />
+			<rect width={BOARD_VIEWBOX_WIDTH} height={BOARD_VIEWBOX_HEIGHT} fill="transparent" />
 
 			<WiringLayer
 				wires={wiresStore.wires}
@@ -353,6 +412,60 @@
 				<g class="lamp-glow" style={`opacity: ${lampGlowOpacity.toFixed(3)};`} aria-hidden="true">
 					<circle class="lamp-glow-outer" cx={lampCenter.x} cy={lampCenter.y} r="18" />
 					<circle class="lamp-glow-inner" cx={lampCenter.x} cy={lampCenter.y} r="9.5" />
+				</g>
+			{/if}
+
+			{#if KEY_COMPONENT}
+				{@const pressed = switchStates['KEY1'] ?? false}
+				<g
+					class="key-widget"
+					class:key-pressed={pressed}
+					role="button"
+					tabindex="0"
+					aria-label={`Morse code key (${pressed ? 'pressed' : 'open'})`}
+					onpointerdown={(e) => { switchStates = { ...switchStates, KEY1: true }; (e.currentTarget as Element).setPointerCapture(e.pointerId); }}
+					onpointerup={(e) => { switchStates = { ...switchStates, KEY1: false }; (e.currentTarget as Element).releasePointerCapture(e.pointerId); }}
+					onpointercancel={(e) => { switchStates = { ...switchStates, KEY1: false }; if ((e.currentTarget as Element).hasPointerCapture(e.pointerId)) (e.currentTarget as Element).releasePointerCapture(e.pointerId); }}
+					onpointerleave={() => { switchStates = { ...switchStates, KEY1: false }; }}
+					onkeydown={(e) => { if (e.key === ' ' || e.key === 'Enter') switchStates = { ...switchStates, KEY1: true }; }}
+					onkeyup={(e) => { if (e.key === ' ' || e.key === 'Enter') switchStates = { ...switchStates, KEY1: false }; }}
+				>
+					<!-- Invisible interaction region over the key graphic in board.svg -->
+					<rect
+						x={KEY_HITBOX.x1}
+						y={KEY_HITBOX.y1}
+						width={KEY_HITBOX.x2 - KEY_HITBOX.x1}
+						height={KEY_HITBOX.y2 - KEY_HITBOX.y1}
+						rx="3"
+						class="key-hitbox"
+					/>
+					{#if pressed}
+						<circle cx={KEY_CENTER.x} cy={KEY_CENTER.y} r="7" class="key-active-indicator" />
+					{/if}
+				</g>
+			{/if}
+
+			{#if VOLTMETER_COMPONENT}
+				<g class="voltmeter-dial" aria-hidden="true">
+					<rect x="236" y="146" width="29" height="25" rx="1.7" class="voltmeter-body" />
+					<rect x="238" y="148" width="25" height="15" rx="0.7" class="voltmeter-window" />
+					<path d="M 241 160 A 9.5 9.5 0 0 1 260 160" class="voltmeter-scale" />
+					<line x1="241" y1="160" x2="242" y2="158" class="voltmeter-tick" />
+					<line x1="250.5" y1="150.5" x2="250.5" y2="152.9" class="voltmeter-tick" />
+					<line x1="260" y1="160" x2="259" y2="158" class="voltmeter-tick" />
+					<text x="240.2" y="154.5" class="voltmeter-label">0</text>
+					<text x="249.5" y="150.2" class="voltmeter-label voltmeter-label-mid">5</text>
+					<text x="257.6" y="154.5" class="voltmeter-label">10</text>
+					<line
+						x1={METER_DIAL_CENTER.x}
+						y1={METER_DIAL_CENTER.y}
+						x2={METER_DIAL_CENTER.x}
+						y2={METER_DIAL_CENTER.y - 8.7}
+						class="voltmeter-needle"
+						transform={`rotate(${meterNeedleAngle} ${METER_DIAL_CENTER.x} ${METER_DIAL_CENTER.y})`}
+					/>
+					<circle cx={METER_DIAL_CENTER.x} cy={METER_DIAL_CENTER.y} r="1.2" class="voltmeter-hub" />
+					<circle cx={METER_DIAL_CENTER.x} cy={METER_DIAL_CENTER.y} r="0.4" class="voltmeter-screw" />
 				</g>
 			{/if}
 
@@ -500,6 +613,7 @@
 	.wire-count,
 	.topology-count,
 	.netlist-count,
+	.meter-readout,
 	.dc-status,
 	.mapping-hint,
 	.ground,
@@ -605,6 +719,83 @@
 
 	.lamp-glow-inner {
 		fill: rgba(255, 180, 40, 0.9);
+	}
+
+	.key-widget {
+		cursor: pointer;
+		user-select: none;
+	}
+
+	.key-hitbox {
+		fill: transparent;
+		stroke: transparent;
+	}
+
+	.key-widget:focus-visible .key-hitbox {
+		stroke: rgba(255, 255, 255, 0.65);
+		stroke-width: 0.6;
+	}
+
+	.key-active-indicator {
+		fill: rgba(120, 255, 120, 0.2);
+		stroke: rgba(120, 255, 120, 0.8);
+		stroke-width: 0.5;
+		pointer-events: none;
+	}
+
+	.voltmeter-dial {
+		pointer-events: none;
+	}
+
+	.voltmeter-body {
+		fill: #d7d7d7;
+		stroke: #8f8f8f;
+		stroke-width: 0.45;
+	}
+
+	.voltmeter-window {
+		fill: #f7f7f4;
+		stroke: #b8b8b8;
+		stroke-width: 0.25;
+	}
+
+	.voltmeter-scale {
+		fill: none;
+		stroke: #222;
+		stroke-width: 0.35;
+	}
+
+	.voltmeter-tick {
+		stroke: #222;
+		stroke-width: 0.3;
+		stroke-linecap: round;
+	}
+
+	.voltmeter-label {
+		font-size: 2.2px;
+		fill: #111;
+		font-weight: 600;
+		font-family: sans-serif;
+	}
+
+	.voltmeter-label-mid {
+		text-anchor: middle;
+	}
+
+	.voltmeter-needle {
+		stroke: #111;
+		stroke-width: 0.55;
+		stroke-linecap: round;
+	}
+
+	.voltmeter-hub {
+		fill: #b5952f;
+		stroke: #6a5320;
+		stroke-width: 0.2;
+	}
+
+	.voltmeter-screw {
+		fill: #6a5320;
 	}
 
 	.topology-panel {

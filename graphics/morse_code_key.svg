@@ -1,0 +1,438 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!-- Created with Inkscape (http://www.inkscape.org/) -->
+
+<svg
+   width="50mm"
+   height="100mm"
+   viewBox="0 0 50 100"
+   version="1.1"
+   id="svg1"
+   inkscape:version="1.4.2 (ebf0e940d0, 2025-05-08)"
+   sodipodi:docname="morse_code_key.svg"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <sodipodi:namedview
+     id="namedview1"
+     pagecolor="#505050"
+     bordercolor="#eeeeee"
+     borderopacity="1"
+     inkscape:showpageshadow="0"
+     inkscape:pageopacity="0"
+     inkscape:pagecheckerboard="0"
+     inkscape:deskcolor="#505050"
+     inkscape:document-units="mm"
+     showguides="true"
+     inkscape:zoom="2.2129354"
+     inkscape:cx="110.26079"
+     inkscape:cy="114.55373"
+     inkscape:window-width="1600"
+     inkscape:window-height="840"
+     inkscape:window-x="0"
+     inkscape:window-y="0"
+     inkscape:window-maximized="1"
+     inkscape:current-layer="layer1">
+    <sodipodi:guide
+       position="8.9999999,89.999999"
+       orientation="-1,0"
+       id="guide2"
+       inkscape:locked="false"
+       inkscape:label=""
+       inkscape:color="rgb(0,134,229)" />
+    <sodipodi:guide
+       position="8.9999999,89.999999"
+       orientation="0,1"
+       id="guide4"
+       inkscape:locked="false"
+       inkscape:label=""
+       inkscape:color="rgb(0,134,229)" />
+    <sodipodi:guide
+       position="3,58.282958"
+       orientation="-1,0"
+       id="guide6"
+       inkscape:locked="false"
+       inkscape:label=""
+       inkscape:color="rgb(0,134,229)" />
+    <sodipodi:guide
+       position="45,97.357235"
+       orientation="-1,0"
+       id="guide7"
+       inkscape:locked="false"
+       inkscape:label=""
+       inkscape:color="rgb(0,134,229)" />
+    <sodipodi:guide
+       position="4,77.485575"
+       orientation="-1,0"
+       id="guide8"
+       inkscape:locked="false"
+       inkscape:label=""
+       inkscape:color="rgb(0,134,229)" />
+    <sodipodi:guide
+       position="24,75.36262"
+       orientation="-1,0"
+       id="guide9"
+       inkscape:locked="false"
+       inkscape:label=""
+       inkscape:color="rgb(0,134,229)" />
+    <sodipodi:guide
+       position="34,6"
+       orientation="0,1"
+       id="guide11"
+       inkscape:locked="false"
+       inkscape:label=""
+       inkscape:color="rgb(0,134,229)" />
+    <sodipodi:guide
+       position="31.078052,69.999999"
+       orientation="0,1"
+       id="guide43"
+       inkscape:locked="false"
+       inkscape:label=""
+       inkscape:color="rgb(0,134,229)" />
+    <sodipodi:guide
+       position="28,71.191423"
+       orientation="-1,0"
+       id="guide44"
+       inkscape:locked="false"
+       inkscape:label=""
+       inkscape:color="rgb(0,134,229)" />
+    <sodipodi:guide
+       position="40,75.999999"
+       orientation="-1,0"
+       id="guide45"
+       inkscape:locked="false"
+       inkscape:label=""
+       inkscape:color="rgb(0,134,229)" />
+    <sodipodi:guide
+       position="33.523812,9.9999999"
+       orientation="0,1"
+       id="guide46"
+       inkscape:locked="false"
+       inkscape:label=""
+       inkscape:color="rgb(0,134,229)" />
+    <sodipodi:guide
+       position="34,71.646174"
+       orientation="-1,0"
+       id="guide47"
+       inkscape:locked="false"
+       inkscape:label=""
+       inkscape:color="rgb(0,134,229)" />
+    <sodipodi:guide
+       position="34,65"
+       orientation="0,1"
+       id="guide48"
+       inkscape:locked="false"
+       inkscape:label=""
+       inkscape:color="rgb(0,134,229)" />
+    <sodipodi:guide
+       position="29.677824,58"
+       orientation="0,1"
+       id="guide49"
+       inkscape:locked="false"
+       inkscape:label=""
+       inkscape:color="rgb(0,134,229)" />
+    <sodipodi:guide
+       position="34,67.999999"
+       orientation="0,-1"
+       id="guide50"
+       inkscape:locked="false" />
+    <sodipodi:guide
+       position="34,62"
+       orientation="0,-1"
+       id="guide51"
+       inkscape:locked="false" />
+  </sodipodi:namedview>
+  <defs
+     id="defs1">
+    <inkscape:path-effect
+       effect="fillet_chamfer"
+       id="path-effect49"
+       is_visible="true"
+       lpeversion="1"
+       nodesatellites_param="F,0,0,1,0,2,0,1 @ F,0,0,1,0,2,0,1 @ F,0,0,1,0,2,0,1 @ F,0,0,1,0,2,0,1"
+       radius="2"
+       unit="mm"
+       method="auto"
+       mode="F"
+       chamfer_steps="1"
+       flexible="false"
+       use_knot_distance="true"
+       apply_no_radius="true"
+       apply_with_radius="true"
+       only_selected="false"
+       hide_knots="false" />
+  </defs>
+  <g
+     inkscape:label="Telegraph_Key"
+     inkscape:groupmode="layer"
+     id="layer1">
+    <rect
+       style="opacity:0.98;fill:#800000;stroke-width:0.81825"
+       id="rect1"
+       width="50"
+       height="100"
+       x="0"
+       y="0"
+       inkscape:label="Box" />
+    <rect
+       style="opacity:0.98;fill:#ffe680;stroke-width:0.499999"
+       id="rect2"
+       width="42"
+       height="92"
+       x="3"
+       y="4"
+       inkscape:label="Sticker" />
+    <g
+       id="g89"
+       inkscape:label="Telegraph_Key_Symbol"
+       style="display:inline"
+       transform="matrix(0.19718501,0,0,0.19718501,-2414.108,-214.18725)">
+      <path
+         style="opacity:0.98;fill:none;stroke:#000000;stroke-width:1.88976;stroke-opacity:1"
+         d="m 12288.5,1162.2955 44.932,-0.1331"
+         id="path83" />
+      <circle
+         style="opacity:0.98;fill:none;stroke:#000000;stroke-width:1.88976;stroke-opacity:1"
+         id="path84"
+         cx="12338.482"
+         cy="1163.3395"
+         r="5.8856082" />
+      <path
+         style="opacity:0.98;fill:none;stroke:#000000;stroke-width:1.88976;stroke-opacity:1"
+         d="m 12344.271,1160.8871 46.006,-23.2481"
+         id="path85" />
+      <path
+         style="opacity:0.98;fill:none;stroke:#000000;stroke-width:1.88976;stroke-opacity:1"
+         d="m 12378.8,1143.1322 -7.062,-13.2916"
+         id="path86" />
+      <path
+         style="opacity:0.98;fill:none;stroke:#000000;stroke-width:1.88976;stroke-opacity:1"
+         d="m 12365.067,1132.6362 13.831,-6.1308"
+         id="path87" />
+      <circle
+         style="opacity:0.98;fill:none;stroke:#000000;stroke-width:1.88976;stroke-opacity:1"
+         id="path88"
+         cx="12389.688"
+         cy="1163.3395"
+         r="6.3270288" />
+      <path
+         style="opacity:0.98;fill:none;stroke:#000000;stroke-width:1.88976;stroke-opacity:1"
+         d="m 12395.918,1162.7509 44.724,0.044"
+         id="path89"
+         sodipodi:nodetypes="cc" />
+    </g>
+    <rect
+       style="opacity:0.98;fill:#ffe680;stroke:#000000;stroke-width:0.251684;stroke-dasharray:none"
+       id="rect11"
+       width="15"
+       height="75"
+       x="9"
+       y="19" />
+    <path
+       style="opacity:0.98;fill:none;stroke:#000000;stroke-width:0.25;stroke-dasharray:none"
+       d="M 8.9999999,24 H 24"
+       id="path12" />
+    <text
+       xml:space="preserve"
+       style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:2.82222px;font-family:'Noto Mono';-inkscape-font-specification:'Noto Mono';text-align:start;writing-mode:lr-tb;direction:ltr;text-anchor:start;opacity:0.98;fill:#000000;stroke:none;stroke-width:0.25;stroke-dasharray:none"
+       x="9.4222336"
+       y="22.546385"
+       id="text12"><tspan
+         sodipodi:role="line"
+         id="tspan12"
+         style="font-style:normal;font-variant:normal;font-weight:bold;font-stretch:condensed;font-size:2.82222px;font-family:'Open Sans Condensed';-inkscape-font-specification:'Open Sans Condensed,  Bold Condensed';stroke-width:0.25"
+         x="9.4222336"
+         y="22.546385">MORSE CODE</tspan></text>
+    <text
+       xml:space="preserve"
+       style="font-style:normal;font-variant:normal;font-weight:bold;font-stretch:condensed;font-size:2.04611px;font-family:'Open Sans Condensed';-inkscape-font-specification:'Open Sans Condensed,  Bold Condensed';text-align:start;writing-mode:lr-tb;direction:ltr;text-anchor:start;opacity:0.98;fill:#000000;stroke:none;stroke-width:0.25;stroke-dasharray:none"
+       x="10.744179"
+       y="27.420042"
+       id="text13"><tspan
+         sodipodi:role="line"
+         style="font-style:normal;font-variant:normal;font-weight:bold;font-stretch:normal;font-size:2.04611px;font-family:'Noto Mono';-inkscape-font-specification:'Noto Mono Bold';fill:#000000;stroke-width:0.25"
+         x="10.744179"
+         y="27.420042"
+         id="tspan17">A .-</tspan><tspan
+         sodipodi:role="line"
+         style="font-style:normal;font-variant:normal;font-weight:bold;font-stretch:normal;font-size:2.04611px;font-family:'Noto Mono';-inkscape-font-specification:'Noto Mono Bold';fill:#000000;stroke-width:0.25"
+         x="10.744179"
+         y="30.040327"
+         id="tspan42">B -...</tspan><tspan
+         sodipodi:role="line"
+         style="font-style:normal;font-variant:normal;font-weight:bold;font-stretch:normal;font-size:2.04611px;font-family:'Noto Mono';-inkscape-font-specification:'Noto Mono Bold';fill:#000000;stroke-width:0.25"
+         x="10.744179"
+         y="32.66061"
+         id="tspan18">C -.-.</tspan><tspan
+         sodipodi:role="line"
+         style="font-style:normal;font-variant:normal;font-weight:bold;font-stretch:normal;font-size:2.04611px;font-family:'Noto Mono';-inkscape-font-specification:'Noto Mono Bold';fill:#000000;stroke-width:0.25"
+         x="10.744179"
+         y="35.280895"
+         id="tspan19">D -..</tspan><tspan
+         sodipodi:role="line"
+         style="font-style:normal;font-variant:normal;font-weight:bold;font-stretch:normal;font-size:2.04611px;font-family:'Noto Mono';-inkscape-font-specification:'Noto Mono Bold';fill:#000000;stroke-width:0.25"
+         x="10.744179"
+         y="37.90118"
+         id="tspan20">E .</tspan><tspan
+         sodipodi:role="line"
+         style="font-style:normal;font-variant:normal;font-weight:bold;font-stretch:normal;font-size:2.04611px;font-family:'Noto Mono';-inkscape-font-specification:'Noto Mono Bold';fill:#000000;stroke-width:0.25"
+         x="10.744179"
+         y="40.521465"
+         id="tspan21">F --.-</tspan><tspan
+         sodipodi:role="line"
+         style="font-style:normal;font-variant:normal;font-weight:bold;font-stretch:normal;font-size:2.04611px;font-family:'Noto Mono';-inkscape-font-specification:'Noto Mono Bold';fill:#000000;stroke-width:0.25"
+         x="10.744179"
+         y="43.141747"
+         id="tspan22">G --.</tspan><tspan
+         sodipodi:role="line"
+         style="font-style:normal;font-variant:normal;font-weight:bold;font-stretch:normal;font-size:2.04611px;font-family:'Noto Mono';-inkscape-font-specification:'Noto Mono Bold';fill:#000000;stroke-width:0.25"
+         x="10.744179"
+         y="45.762032"
+         id="tspan23">H ....</tspan><tspan
+         sodipodi:role="line"
+         style="font-style:normal;font-variant:normal;font-weight:bold;font-stretch:normal;font-size:2.04611px;font-family:'Noto Mono';-inkscape-font-specification:'Noto Mono Bold';fill:#000000;stroke-width:0.25"
+         x="10.744179"
+         y="48.382317"
+         id="tspan24">I ..</tspan><tspan
+         sodipodi:role="line"
+         style="font-style:normal;font-variant:normal;font-weight:bold;font-stretch:normal;font-size:2.04611px;font-family:'Noto Mono';-inkscape-font-specification:'Noto Mono Bold';fill:#000000;stroke-width:0.25"
+         x="10.744179"
+         y="51.002602"
+         id="tspan25">J .---</tspan><tspan
+         sodipodi:role="line"
+         style="font-style:normal;font-variant:normal;font-weight:bold;font-stretch:normal;font-size:2.04611px;font-family:'Noto Mono';-inkscape-font-specification:'Noto Mono Bold';fill:#000000;stroke-width:0.25"
+         x="10.744179"
+         y="53.622887"
+         id="tspan26">K -.-</tspan><tspan
+         sodipodi:role="line"
+         style="font-style:normal;font-variant:normal;font-weight:bold;font-stretch:normal;font-size:2.04611px;font-family:'Noto Mono';-inkscape-font-specification:'Noto Mono Bold';fill:#000000;stroke-width:0.25"
+         x="10.744179"
+         y="56.243172"
+         id="tspan27">L .-..</tspan><tspan
+         sodipodi:role="line"
+         style="font-style:normal;font-variant:normal;font-weight:bold;font-stretch:normal;font-size:2.04611px;font-family:'Noto Mono';-inkscape-font-specification:'Noto Mono Bold';fill:#000000;stroke-width:0.25"
+         x="10.744179"
+         y="58.863453"
+         id="tspan28">M -- </tspan><tspan
+         sodipodi:role="line"
+         style="font-style:normal;font-variant:normal;font-weight:bold;font-stretch:normal;font-size:2.04611px;font-family:'Noto Mono';-inkscape-font-specification:'Noto Mono Bold';fill:#000000;stroke-width:0.25"
+         x="10.744179"
+         y="61.483738"
+         id="tspan29">N -.</tspan><tspan
+         sodipodi:role="line"
+         style="font-style:normal;font-variant:normal;font-weight:bold;font-stretch:normal;font-size:2.04611px;font-family:'Noto Mono';-inkscape-font-specification:'Noto Mono Bold';fill:#000000;stroke-width:0.25"
+         x="10.744179"
+         y="64.104027"
+         id="tspan30">O ---</tspan><tspan
+         sodipodi:role="line"
+         style="font-style:normal;font-variant:normal;font-weight:bold;font-stretch:normal;font-size:2.04611px;font-family:'Noto Mono';-inkscape-font-specification:'Noto Mono Bold';fill:#000000;stroke-width:0.25"
+         x="10.744179"
+         y="66.724304"
+         id="tspan31">P .--.</tspan><tspan
+         sodipodi:role="line"
+         style="font-style:normal;font-variant:normal;font-weight:bold;font-stretch:normal;font-size:2.04611px;font-family:'Noto Mono';-inkscape-font-specification:'Noto Mono Bold';fill:#000000;stroke-width:0.25"
+         x="10.744179"
+         y="69.344589"
+         id="tspan32">Q --.-</tspan><tspan
+         sodipodi:role="line"
+         style="font-style:normal;font-variant:normal;font-weight:bold;font-stretch:normal;font-size:2.04611px;font-family:'Noto Mono';-inkscape-font-specification:'Noto Mono Bold';fill:#000000;stroke-width:0.25"
+         x="10.744179"
+         y="71.964874"
+         id="tspan33">R .-.</tspan><tspan
+         sodipodi:role="line"
+         style="font-style:normal;font-variant:normal;font-weight:bold;font-stretch:normal;font-size:2.04611px;font-family:'Noto Mono';-inkscape-font-specification:'Noto Mono Bold';fill:#000000;stroke-width:0.25"
+         x="10.744179"
+         y="74.585159"
+         id="tspan34">S ...</tspan><tspan
+         sodipodi:role="line"
+         style="font-style:normal;font-variant:normal;font-weight:bold;font-stretch:normal;font-size:2.04611px;font-family:'Noto Mono';-inkscape-font-specification:'Noto Mono Bold';fill:#000000;stroke-width:0.25"
+         x="10.744179"
+         y="77.205444"
+         id="tspan35">T -</tspan><tspan
+         sodipodi:role="line"
+         style="font-style:normal;font-variant:normal;font-weight:bold;font-stretch:normal;font-size:2.04611px;font-family:'Noto Mono';-inkscape-font-specification:'Noto Mono Bold';fill:#000000;stroke-width:0.25"
+         x="10.744179"
+         y="79.825729"
+         id="tspan36">U ..-</tspan><tspan
+         sodipodi:role="line"
+         style="font-style:normal;font-variant:normal;font-weight:bold;font-stretch:normal;font-size:2.04611px;font-family:'Noto Mono';-inkscape-font-specification:'Noto Mono Bold';fill:#000000;stroke-width:0.25"
+         x="10.744179"
+         y="82.446014"
+         id="tspan37">V ...-</tspan><tspan
+         sodipodi:role="line"
+         style="font-style:normal;font-variant:normal;font-weight:bold;font-stretch:normal;font-size:2.04611px;font-family:'Noto Mono';-inkscape-font-specification:'Noto Mono Bold';fill:#000000;stroke-width:0.25"
+         x="10.744179"
+         y="85.066299"
+         id="tspan38">W .--</tspan><tspan
+         sodipodi:role="line"
+         style="font-style:normal;font-variant:normal;font-weight:bold;font-stretch:normal;font-size:2.04611px;font-family:'Noto Mono';-inkscape-font-specification:'Noto Mono Bold';fill:#000000;stroke-width:0.25"
+         x="10.744179"
+         y="87.686584"
+         id="tspan39">X -..-</tspan><tspan
+         sodipodi:role="line"
+         style="font-style:normal;font-variant:normal;font-weight:bold;font-stretch:normal;font-size:2.04611px;font-family:'Noto Mono';-inkscape-font-specification:'Noto Mono Bold';fill:#000000;stroke-width:0.25"
+         x="10.744179"
+         y="90.30687"
+         id="tspan40">Y -.--</tspan><tspan
+         sodipodi:role="line"
+         style="font-style:normal;font-variant:normal;font-weight:bold;font-stretch:normal;font-size:2.04611px;font-family:'Noto Mono';-inkscape-font-specification:'Noto Mono Bold';fill:#000000;stroke-width:0.25"
+         x="10.744179"
+         y="92.927155"
+         id="tspan41">Z --..</tspan></text>
+    <text
+       xml:space="preserve"
+       style="font-style:normal;font-variant:normal;font-weight:bold;font-stretch:condensed;font-size:2.82223px;font-family:'Open Sans Condensed';-inkscape-font-specification:'Open Sans Condensed,  Bold Condensed';text-align:start;writing-mode:lr-tb;direction:ltr;text-anchor:start;opacity:0.98;fill:#000000;stroke:none;stroke-width:0.25;stroke-dasharray:none"
+       x="10.627334"
+       y="28.589025"
+       id="text14"><tspan
+         sodipodi:role="line"
+         id="tspan14"
+         style="stroke-width:0.25"></tspan></text>
+    <text
+       xml:space="preserve"
+       style="font-style:normal;font-variant:normal;font-weight:bold;font-stretch:normal;font-size:2.82222px;font-family:'Noto Mono';-inkscape-font-specification:'Noto Mono Bold';text-align:start;writing-mode:lr-tb;direction:ltr;text-anchor:start;opacity:0.98;fill:#000000;stroke:none;stroke-width:0.25;stroke-dasharray:none"
+       x="25.809235"
+       y="94"
+       id="text43"><tspan
+         sodipodi:role="line"
+         id="tspan43"
+         style="font-size:2.82222px;stroke-width:0.25"
+         x="25.809235"
+         y="94">KEY</tspan></text>
+    <rect
+       style="opacity:0.98;fill:#b3b3b3;stroke:none;stroke-width:0.853558;stroke-dasharray:none"
+       id="rect48"
+       width="12"
+       height="58.284859"
+       x="27.999998"
+       y="30.000002" />
+    <circle
+       style="opacity:0.98;fill:#cccccc;stroke:none;stroke-width:0.25;stroke-dasharray:none"
+       id="path48"
+       cx="34"
+       cy="35"
+       r="3" />
+    <path
+       style="opacity:0.98;fill:#4d4d4d;stroke:none;stroke-width:0.459344;stroke-dasharray:none"
+       id="rect49"
+       width="15"
+       height="15"
+       x="26.5"
+       y="75"
+       inkscape:path-effect="#path-effect49"
+       sodipodi:type="rect"
+       d="m 28.5,75 h 11 a 2,2 45 0 1 2,2 v 11 a 2,2 135 0 1 -2,2 h -11 a 2,2 45 0 1 -2,-2 V 77 a 2,2 135 0 1 2,-2 z" />
+    <path
+       style="opacity:0.98;fill:none;stroke:#cccccc;stroke-width:0.25;stroke-dasharray:none"
+       d="m 27.999999,41.825 h 12"
+       id="path49" />
+    <path
+       style="opacity:0.98;fill:none;stroke:#4d4d4d;stroke-width:0.25;stroke-dasharray:none"
+       d="m 27.999999,42.125 h 12"
+       id="path50" />
+    <path
+       style="opacity:0.98;fill:none;stroke:#4d4d4d;stroke-width:0.244868;stroke-linecap:round;stroke-dasharray:none"
+       d="M 34,32.122434 V 37.87866"
+       id="path51" />
+  </g>
+</svg>

@@ -341,6 +341,20 @@ const controlsAndSources: KitComponent[] = [
 		name: 'antenna / ground input',
 		terminals: [44, 45],
 		metadata: { antenna: 44, ground: 45 }
+	},
+	{
+		id: 'KEY1',
+		kind: 'switch',
+		name: 'morse code key',
+		terminals: [82, 83],
+		metadata: { normallyOpen: true, terminal1: 82, terminal2: 83 }
+	},
+	{
+		id: 'VM1',
+		kind: 'voltmeter',
+		name: 'voltmeter',
+		terminals: [80, 81],
+		metadata: { positive: 81, negative: 80 }
 	}
 ];
 
@@ -357,4 +371,4 @@ export const KIT_TERMINAL_IDS = Array.from(
 	new Set(KIT_COMPONENTS.flatMap((component) => component.terminals))
 ).sort((a, b) => a - b);
 
-export const UNMAPPED_TERMINAL_GAPS = [64, 65, 66, 67, 80, 81, 82, 83, 84, 85];
+export const UNMAPPED_TERMINAL_GAPS = [64, 65, 66, 67, 84, 85];

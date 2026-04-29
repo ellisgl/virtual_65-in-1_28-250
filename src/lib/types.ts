@@ -13,7 +13,9 @@ export type ComponentKind =
 	| 'transformer'
 	| 'lamp'
 	| 'relay'
-	| 'antenna';
+	| 'antenna'
+	| 'switch'
+	| 'voltmeter';
 
 export type DeviceModelType = 'diode' | 'bjt' | 'scr' | 'relay' | 'lamp';
 
@@ -145,6 +147,7 @@ export interface SimulationNetlist {
 export interface SimulationBuildOptions {
 	valueOverrides?: Record<string, number>;
 	positionOverrides?: Record<string, number>;
+	switchStates?: Record<string, boolean>;
 }
 
 export type DcSolveIssueCode =

@@ -28,6 +28,7 @@ export function buildSimulationNetlist(
 	const connectedNodeSet = new Set(topology.connectedNodeIds);
 	const valueOverrides = options.valueOverrides ?? {};
 	const positionOverrides = options.positionOverrides ?? {};
+	const switchStates = options.switchStates ?? {};
 
 	const elements: SimulationElement[] = [];
 	const unsupported: UnsupportedElement[] = [];
@@ -335,6 +336,34 @@ export function buildSimulationNetlist(
 			continue;
 		}
 
+		if (component.kind === 'switch') {
+			// Open (normallyOpen default) — only compile when closed.
+			const closed = switchStates[component.id] ?? false;
+			if (!closed) continue; // open circuit — no element emitted
+
+			if (binding.nodeIds.length !== 2) {
+				unsupported.push({
+					componentId: component.id,
+					kind: component.kind,
+					reason: 'Switch requires exactly two nodes'
+				});
+				continue;
+			}
+			elements.push({
+				type: 'resistor',
+				componentId: component.id,
+				nodes: [binding.nodeIds[0], binding.nodeIds[1]],
+				resistanceOhms: 0.001 // closed contact
+			});
+			continue;
+		}
+
+		if (component.kind === 'voltmeter') {
+			// Ideal voltmeter: infinite impedance, so it does not load the circuit.
+			continue;
+		}
+
+		// Fallthrough — not implemented
 		unsupported.push({
 			componentId: component.id,
 			kind: component.kind,
