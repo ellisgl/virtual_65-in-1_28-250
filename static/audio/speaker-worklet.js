@@ -1,3 +1,6 @@
+/* global AudioWorkletProcessor, registerProcessor */
+/// <reference lib="WebWorker" />
+/// <reference lib="DOM" />
 class SpeakerSampleProcessor extends AudioWorkletProcessor {
 	constructor() {
 		super();
