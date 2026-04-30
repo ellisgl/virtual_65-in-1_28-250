@@ -107,6 +107,11 @@ export interface SimulationTransistorElement {
 	collectorNode: number;
 	emitterNode: number;
 	beta: number;
+	is: number;
+	nf: number;
+	vaf: number;
+	cjeFarads: number;
+	cjcFarads: number;
 }
 
 export interface SimulationRelayElement {
@@ -124,12 +129,23 @@ export interface SimulationRelayElement {
 	offCurrent: number;
 }
 
+export interface SimulationTransformerElement {
+	type: 'transformer';
+	componentId: string;
+	primaryNodeA: number;
+	primaryNodeB: number;
+	secondaryNodeA: number;
+	secondaryNodeB: number;
+	turnsRatio: number;
+}
+
 export type SimulationElement =
 	| SimulationResistorElement
 	| SimulationVoltageSourceElement
 	| SimulationCapacitorElement
 	| SimulationTransistorElement
-	| SimulationRelayElement;
+	| SimulationRelayElement
+	| SimulationTransformerElement;
 
 export interface UnsupportedElement {
 	componentId: string;

@@ -67,6 +67,25 @@ export function buildSimulationNetlist(
 			continue;
 		}
 
+		if (component.kind === 'speaker') {
+			const resistanceOhms = asNumber(valueOverrides[component.id] ?? component.value);
+			if (binding.nodeIds.length !== 2 || resistanceOhms === null || resistanceOhms <= 0) {
+				unsupported.push({
+					componentId: component.id,
+					kind: component.kind,
+					reason: 'Speaker requires two nodes and a positive impedance value'
+				});
+				continue;
+			}
+			elements.push({
+				type: 'resistor',
+				componentId: component.id,
+				nodes: [binding.nodeIds[0], binding.nodeIds[1]],
+				resistanceOhms
+			});
+			continue;
+		}
+
 		if (component.kind === 'battery') {
 			const voltage = asNumber(valueOverrides[component.id] ?? component.value);
 			const positiveTerminal = asNumber(component.metadata?.positive);
@@ -222,6 +241,11 @@ export function buildSimulationNetlist(
 			const collector = asNumber(component.metadata?.collector);
 			const emitter = asNumber(component.metadata?.emitter);
 			const beta = asNumber(component.model?.params?.bf) ?? 100;
+			const is = asNumber(component.model?.params?.is) ?? 1e-15;
+			const nf = asNumber(component.model?.params?.nf) ?? 1;
+			const vafModel = asNumber(component.model?.params?.vaf) ?? 100;
+			const cjeFarads = asNumber(component.model?.params?.cje) ?? 0;
+			const cjcFarads = asNumber(component.model?.params?.cjc) ?? 0;
 
 			if (
 				(polarity !== 'npn' && polarity !== 'pnp') ||
@@ -260,7 +284,12 @@ export function buildSimulationNetlist(
 				baseNode,
 				collectorNode,
 				emitterNode,
-				beta
+				beta,
+				is,
+				nf,
+				vaf: Math.max(Math.abs(vafModel), 1),
+				cjeFarads: Math.max(cjeFarads, 0),
+				cjcFarads: Math.max(cjcFarads, 0)
 			});
 			continue;
 		}
@@ -336,6 +365,96 @@ export function buildSimulationNetlist(
 			continue;
 		}
 
+		if (component.kind === 'transformer') {
+			const primaryStart = asNumber(component.metadata?.primaryStart);
+			const primaryCenterTap = asNumber(component.metadata?.primaryCenterTap);
+			const primaryEnd = asNumber(component.metadata?.primaryEnd);
+			const secondaryStart = asNumber(component.metadata?.secondaryStart);
+			const secondaryEnd = asNumber(component.metadata?.secondaryEnd);
+			const rp1Ohm = asNumber(component.metadata?.rp1Ohm);
+			const rp2Ohm = asNumber(component.metadata?.rp2Ohm);
+			const rsOhm = asNumber(component.metadata?.rsOhm);
+			const turnsRatioApprox = asNumber(component.metadata?.turnsRatioApprox);
+			const ratioParameter = asNumber(component.metadata?.ratioParameter);
+			const turnsRatio =
+				turnsRatioApprox ??
+				(ratioParameter !== null && ratioParameter > 0 ? 1 / ratioParameter : null);
+
+			if (
+				primaryStart === null ||
+				primaryCenterTap === null ||
+				primaryEnd === null ||
+				secondaryStart === null ||
+				secondaryEnd === null ||
+				rp1Ohm === null ||
+				rp2Ohm === null ||
+				rsOhm === null ||
+				turnsRatio === null ||
+				turnsRatio <= 0 ||
+				rp1Ohm <= 0 ||
+				rp2Ohm <= 0 ||
+				rsOhm <= 0
+			) {
+				unsupported.push({
+					componentId: component.id,
+					kind: component.kind,
+					reason:
+						'Transformer requires winding terminal metadata, positive winding resistances, and a positive turns ratio'
+				});
+				continue;
+			}
+
+			const nodePrimaryStart = topology.terminalToNode[primaryStart];
+			const nodePrimaryCenter = topology.terminalToNode[primaryCenterTap];
+			const nodePrimaryEnd = topology.terminalToNode[primaryEnd];
+			const nodeSecondaryStart = topology.terminalToNode[secondaryStart];
+			const nodeSecondaryEnd = topology.terminalToNode[secondaryEnd];
+
+			if (
+				typeof nodePrimaryStart !== 'number' ||
+				typeof nodePrimaryCenter !== 'number' ||
+				typeof nodePrimaryEnd !== 'number' ||
+				typeof nodeSecondaryStart !== 'number' ||
+				typeof nodeSecondaryEnd !== 'number'
+			) {
+				unsupported.push({
+					componentId: component.id,
+					kind: component.kind,
+					reason: 'Transformer terminals are missing topology node bindings'
+				});
+				continue;
+			}
+
+			elements.push({
+				type: 'resistor',
+				componentId: `${component.id}:P1`,
+				nodes: [nodePrimaryStart, nodePrimaryCenter],
+				resistanceOhms: rp1Ohm
+			});
+			elements.push({
+				type: 'resistor',
+				componentId: `${component.id}:P2`,
+				nodes: [nodePrimaryCenter, nodePrimaryEnd],
+				resistanceOhms: rp2Ohm
+			});
+			elements.push({
+				type: 'resistor',
+				componentId: `${component.id}:S`,
+				nodes: [nodeSecondaryStart, nodeSecondaryEnd],
+				resistanceOhms: rsOhm
+			});
+			elements.push({
+				type: 'transformer',
+				componentId: component.id,
+				primaryNodeA: nodePrimaryStart,
+				primaryNodeB: nodePrimaryEnd,
+				secondaryNodeA: nodeSecondaryStart,
+				secondaryNodeB: nodeSecondaryEnd,
+				turnsRatio
+			});
+			continue;
+		}
+
 		if (component.kind === 'switch') {
 			// Open (normallyOpen default) — only compile when closed.
 			const closed = switchStates[component.id] ?? false;
@@ -360,6 +479,11 @@ export function buildSimulationNetlist(
 
 		if (component.kind === 'voltmeter') {
 			// Ideal voltmeter: infinite impedance, so it does not load the circuit.
+			continue;
+		}
+
+		if (component.kind === 'antenna') {
+			// External input placeholder for now; intentionally a runtime no-op.
 			continue;
 		}
 

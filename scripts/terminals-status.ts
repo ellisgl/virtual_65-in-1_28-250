@@ -1,6 +1,6 @@
-import { KIT_COMPONENTS, KIT_TERMINAL_IDS } from '../src/lib/data/components';
-import { TERMINAL_POSITIONS, isTerminalPositionMapped } from '../src/lib/data/terminalPositions';
-import type { KitComponent } from '../src/lib/types';
+import { KIT_COMPONENTS, KIT_TERMINAL_IDS } from '../src/lib';
+import { TERMINAL_POSITIONS, isTerminalPositionMapped } from '../src/lib';
+import type { KitComponent } from '../src/lib';
 
 const strictMode = process.argv.includes('--strict');
 

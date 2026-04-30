@@ -1,11 +1,11 @@
-import { KIT_COMPONENTS } from '../src/lib/data/components';
+import { KIT_COMPONENTS } from '../src/lib';
 import {
 	buildCircuitTopology,
 	buildSimulationNetlist,
 	initializeTransientState,
 	stepTransientNetlist
-} from '../src/lib/sim';
-import type { Wire } from '../src/lib/types';
+} from '../src/lib';
+import type { Wire } from '../src/lib';
 
 // RC demo using kit parts:
 // BAT9+ (86) -> R1 (1-2) -> C4 (30-31) -> BAT9- (87)

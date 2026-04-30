@@ -1,6 +1,6 @@
-import { KIT_COMPONENTS } from '../src/lib/data/components';
-import { buildSimulationNetlist, buildCircuitTopology, solveDcNetlist } from '../src/lib/sim';
-import type { Wire } from '../src/lib/types';
+import { KIT_COMPONENTS } from '../src/lib';
+import { buildSimulationNetlist, buildCircuitTopology, solveDcNetlist } from '../src/lib';
+import type { Wire } from '../src/lib';
 
 const demoWires: Wire[] = [
 	{ id: 'w1', fromTerminal: 86, toTerminal: 1, color: '#e53935' },
