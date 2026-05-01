@@ -80,6 +80,8 @@
 					<strong>{element.componentId}</strong>: RL coil N{element.coilPositiveNode}-N{element.coilNegativeNode}, COM:N{element.commonNode} NC:N{element.normallyClosedNode} NO:N{element.normallyOpenNode}
 				{:else if element.type === 'transformer'}
 					<strong>{element.componentId}</strong>: XFMR P:N{element.primaryNodeA}-N{element.primaryNodeB} S:N{element.secondaryNodeA}-N{element.secondaryNodeB} n={element.turnsRatio}
+				{:else if element.type === 'inductor'}
+					<strong>{element.componentId}</strong>: L N{element.nodes[0]}-N{element.nodes[1]} = {element.inductanceHenry * 1000} mH
 				{:else}
 					<strong>{element.componentId}</strong>: V N{element.positiveNode}-N{element.negativeNode} = {element.voltage} V
 				{/if}

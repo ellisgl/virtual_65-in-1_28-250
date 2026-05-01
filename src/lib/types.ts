@@ -139,10 +139,18 @@ export interface SimulationTransformerElement {
 	turnsRatio: number;
 }
 
+export interface SimulationInductorElement {
+	type: 'inductor';
+	componentId: string;
+	nodes: [number, number];
+	inductanceHenry: number;
+}
+
 export type SimulationElement =
 	| SimulationResistorElement
 	| SimulationVoltageSourceElement
 	| SimulationCapacitorElement
+	| SimulationInductorElement
 	| SimulationTransistorElement
 	| SimulationRelayElement
 	| SimulationTransformerElement;

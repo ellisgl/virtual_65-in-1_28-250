@@ -33,6 +33,12 @@ export function buildSimulationNetlist(
 	const elements: SimulationElement[] = [];
 	const unsupported: UnsupportedElement[] = [];
 
+	// Internal nodes for subcircuit expansion (speaker RL, etc.) sit above all
+	// topology node IDs. Find the max used node id first.
+	const maxTopologyNodeId = topology.connectedNodeIds.reduce((m, id) => Math.max(m, id), 0);
+	let nextInternalNodeId = maxTopologyNodeId + 10_000; // leave headroom
+	const allocInternalNode = () => nextInternalNodeId++;
+
 	for (const binding of topology.componentBindings) {
 		const component = componentById.get(binding.componentId);
 		if (!component) {
@@ -77,11 +83,22 @@ export function buildSimulationNetlist(
 				});
 				continue;
 			}
+			// Model speaker as a voice-coil series RL:
+			//   nodeA --[Rvc]-- midNode --[Lvc]-- nodeB
+			// Rvc = DC resistance of voice coil (~same as rated impedance for 8Ω speaker)
+			// Lvc = voice-coil inductance (typical 8Ω wideband: ~0.3 mH)
+			const midNode = allocInternalNode();
 			elements.push({
 				type: 'resistor',
-				componentId: component.id,
-				nodes: [binding.nodeIds[0], binding.nodeIds[1]],
+				componentId: `${component.id}:Rvc`,
+				nodes: [binding.nodeIds[0], midNode],
 				resistanceOhms
+			});
+			elements.push({
+				type: 'inductor',
+				componentId: `${component.id}:Lvc`,
+				nodes: [midNode, binding.nodeIds[1]],
+				inductanceHenry: 0.3e-3 // 0.3 mH typical 8 Ω voice coil
 			});
 			continue;
 		}

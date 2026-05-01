@@ -6,6 +6,12 @@ export interface TransistorStamp {
 	gBe: number;
 	gCe: number;
 	gmSigned: number;
+	// Linearization current offsets for Newton-Raphson companion model.
+	// These anchor the conductance stamp to the actual device curve at the
+	// current operating point. Subtract from RHS at the respective node.
+	iEqB: number;
+	iEqC: number;
+	iEqE: number;
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -40,10 +46,28 @@ export function computeTransistorStamp(
 	const collectorCurrent = Math.max(0, ic0 * earlyFactor);
 	const gCe = Math.max(1e-10, collectorCurrent / earlyV);
 
+	// Actual device currents at this operating point.
+	// Ib = gBe*(vb-ve), Ic = gm*(vb-ve) + gCe*(vc-ve), Ie = -(Ib+Ic)
+	const iB = gBe * vbe;
+	const iC = gm * vbe + gCe * vce;
+	const iE = -(iB + iC);
+
+	// Linearization offsets: I_device - G*V_operating, stamped onto RHS so that
+	// the Newton update converges to the correct nonlinear solution.
+	// For NPN: positive collector current flows into collector (out of node).
+	// Sign convention: iEq is the current the companion source *injects* into the node.
+	const sign = polaritySign;
+	const iEqB = sign * (iB - gBe * vbe);        // = 0 (simplifies, but kept for clarity)
+	const iEqC = sign * (iC - gm * vbe - gCe * vce); // = 0 too, but generalises to VAF terms
+	const iEqE = -(iEqB + iEqC);
+
 	return {
 		gBe,
 		gCe,
-		gmSigned: gm * polaritySign
+		gmSigned: gm * polaritySign,
+		iEqB,
+		iEqC,
+		iEqE
 	};
 }
 

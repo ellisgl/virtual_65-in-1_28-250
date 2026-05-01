@@ -104,6 +104,7 @@ const model1N34A: DeviceModel = {
 	}
 };
 
+// Zener Diode
 const model1N5233: DeviceModel = {
 	name: '1N5233',
 	type: 'diode',

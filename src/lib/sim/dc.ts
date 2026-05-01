@@ -38,7 +38,10 @@ export function solveDcNetlist(netlist: SimulationNetlist): DcSolution {
 		};
 	}
 
-	const dcElements = netlist.elements.filter((element) => element.type !== 'capacitor');
+	// Inductors are short circuits at DC; capacitors are open circuits.
+	const dcElements = netlist.elements.filter(
+		(element) => element.type !== 'capacitor' && element.type !== 'inductor'
+	);
 	if (dcElements.length === 0) {
 		return {
 			ok: false,
@@ -69,7 +72,7 @@ export function solveDcNetlist(netlist: SimulationNetlist): DcSolution {
 			usedNodes.add(element.primaryNodeB);
 			usedNodes.add(element.secondaryNodeA);
 			usedNodes.add(element.secondaryNodeB);
-		} else {
+		} else if (element.type === 'relay') {
 			usedNodes.add(element.coilPositiveNode);
 			usedNodes.add(element.coilNegativeNode);
 			usedNodes.add(element.commonNode);

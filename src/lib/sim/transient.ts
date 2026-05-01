@@ -1,6 +1,7 @@
 import {solveLinearSystem} from '$lib/sim/linear';
 import {computeTransistorStamp} from '$lib/sim/transistor';
 import type {
+    SimulationInductorElement,
     SimulationNetlist,
     SimulationTransformerElement,
     SimulationVoltageSourceElement,
@@ -11,6 +12,9 @@ import type {
 
 export function initializeTransientState(netlist: SimulationNetlist): TransientState {
     const capacitorVoltages: Record<string, number> = {};
+    // Inductor companion state: we track the voltage across the inductor
+    // (stored in capacitorVoltages under a ':v' key) so we can compute the
+    // companion current source each step.  Initial voltage = 0 (no stored energy).
     const relayStates: Record<string, boolean> = {};
     for (const element of netlist.elements) {
         if (element.type !== 'capacitor') {
@@ -18,6 +22,12 @@ export function initializeTransientState(netlist: SimulationNetlist): TransientS
         }
 
         capacitorVoltages[element.componentId] = element.initialVoltage;
+    }
+
+    for (const element of netlist.elements) {
+        if (element.type === 'inductor') {
+            capacitorVoltages[element.componentId] = 0; // initial voltage across inductor = 0
+        }
     }
 
     for (const element of netlist.elements) {
@@ -99,7 +109,7 @@ export function stepTransientNetlist(
 
     const usedNodes = new Set<number>([netlist.groundNodeId]);
     for (const element of netlist.elements) {
-        if (element.type === 'resistor' || element.type === 'capacitor') {
+        if (element.type === 'resistor' || element.type === 'capacitor' || element.type === 'inductor') {
             usedNodes.add(element.nodes[0]);
             usedNodes.add(element.nodes[1]);
         } else if (element.type === 'voltage-source') {
@@ -131,7 +141,7 @@ export function stepTransientNetlist(
     };
 
     for (const element of netlist.elements) {
-        if (element.type === 'resistor' || element.type === 'capacitor') {
+        if (element.type === 'resistor' || element.type === 'capacitor' || element.type === 'inductor') {
             link(element.nodes[0], element.nodes[1]);
             link(element.nodes[1], element.nodes[0]);
         } else if (element.type === 'voltage-source') {
@@ -173,7 +183,7 @@ export function stepTransientNetlist(
     }
 
     const groundedElements = netlist.elements.filter((element) => {
-        if (element.type === 'resistor' || element.type === 'capacitor') {
+        if (element.type === 'resistor' || element.type === 'capacitor' || element.type === 'inductor') {
             return groundedNodes.has(element.nodes[0]) && groundedNodes.has(element.nodes[1]);
         }
         if (element.type === 'voltage-source') {
@@ -324,6 +334,9 @@ export function stepTransientNetlist(
     }
 
     const transistorElements = groundedElements.filter((element) => element.type === 'transistor');
+    const inductorElements = groundedElements.filter(
+        (element): element is SimulationInductorElement => element.type === 'inductor'
+    );
     const transistorIterations = transistorElements.length > 0 ? 5 : 1;
     const totalIterations = Math.max(transistorIterations, relayIterations);
     let estimateVoltages: Record<number, number> = {...state.nodeVoltages};
@@ -372,6 +385,21 @@ export function stepTransientNetlist(
             if (ib !== undefined) rhs[ib] -= g * previousVoltage;
         }
 
+        // Inductor backward-Euler companion: L/dt conductance + history current source.
+        // The inductor companion is dual to the capacitor: G_L = L/dt (large L → small G),
+        // and the current source I_eq = G_L * V_prev drives current from nodeA to nodeB.
+        for (const element of inductorElements) {
+            const prevV = state.capacitorVoltages[element.componentId] ?? 0;
+            const g = config.dt / element.inductanceHenry; // G_L = dt/L
+            stampConductance(element.nodes[0], element.nodes[1], g);
+            const ia = nodeIndex.get(element.nodes[0]);
+            const ib = nodeIndex.get(element.nodes[1]);
+            // I_eq = prevI = prevV * G_L (current that was flowing last step)
+            const ieq = prevV * g;
+            if (ia !== undefined) rhs[ia] += ieq;
+            if (ib !== undefined) rhs[ib] -= ieq;
+        }
+
         stampRelays();
 
         for (const transistor of transistorElements) {
@@ -381,6 +409,7 @@ export function stepTransientNetlist(
 
             const rowC = nodeIndex.get(transistor.collectorNode);
             const rowE = nodeIndex.get(transistor.emitterNode);
+            const rowB = nodeIndex.get(transistor.baseNode);
             const colB = nodeIndex.get(transistor.baseNode);
             const colE = nodeIndex.get(transistor.emitterNode);
 
@@ -388,6 +417,14 @@ export function stepTransientNetlist(
             if (rowC !== undefined && colE !== undefined) matrix[rowC][colE] -= stamp.gmSigned;
             if (rowE !== undefined && colB !== undefined) matrix[rowE][colB] -= stamp.gmSigned;
             if (rowE !== undefined && colE !== undefined) matrix[rowE][colE] += stamp.gmSigned;
+
+            // Linearization current offsets (Ieq) for correct Newton-Raphson stamping.
+            // Without these the operating point drifts — each iteration only has the
+            // conductance stamp but not the companion current that anchors it to the
+            // actual device curve.
+            if (rowB !== undefined) rhs[rowB] -= stamp.iEqB;
+            if (rowC !== undefined) rhs[rowC] -= stamp.iEqC;
+            if (rowE !== undefined) rhs[rowE] -= stamp.iEqE;
 
             if (transistor.cjeFarads > 0) {
                 const key = `${transistor.componentId}:be`;
@@ -473,6 +510,12 @@ export function stepTransientNetlist(
     const capacitorVoltages: Record<string, number> = {...state.capacitorVoltages};
     for (const element of groundedElements) {
         if (element.type !== 'capacitor') continue;
+        const va = nodeVoltages[element.nodes[0]] ?? 0;
+        const vb = nodeVoltages[element.nodes[1]] ?? 0;
+        capacitorVoltages[element.componentId] = va - vb;
+    }
+    // Store inductor voltage for companion model next step.
+    for (const element of inductorElements) {
         const va = nodeVoltages[element.nodes[0]] ?? 0;
         const vb = nodeVoltages[element.nodes[1]] ?? 0;
         capacitorVoltages[element.componentId] = va - vb;

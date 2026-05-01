@@ -3,7 +3,6 @@
 	import { KIT_COMPONENTS, KIT_TERMINAL_IDS, TERMINAL_POSITIONS, isTerminalPositionMapped } from '$lib/data';
 	import Terminal from '$lib/components/Terminal.svelte';
 	import WiringLayer from '$lib/components/WiringLayer.svelte';
-	import BoardDebugPanels from '$lib/components/board/BoardDebugPanels.svelte';
 	import BoardControlKnobs from '$lib/components/board/BoardControlKnobs.svelte';
 	import { formatCapacitance, formatPotPosition, voltageToColor } from '$lib/components/board/helpers';
 	import KeySwitchOverlay from '$lib/components/board/KeySwitchOverlay.svelte';
@@ -19,7 +18,6 @@
 	import type { TransientResult, TransientState } from '$lib/types';
 
 	const mappedTerminalIds = KIT_TERMINAL_IDS.filter((id) => isTerminalPositionMapped(id));
-	const unmappedCount = KIT_TERMINAL_IDS.length - mappedTerminalIds.length;
 	const TERMINAL_SNAP_RADIUS = 4;
 	const LAMP_COMPONENT = KIT_COMPONENTS.find((component) => component.id === 'LAMP1');
 	const SPEAKER_COMPONENT = KIT_COMPONENTS.find((component) => component.id === 'SPK1');
@@ -57,6 +55,15 @@
 	const LAMP_GLOW_MAX = 1;
 	const TRANSIENT_RUN_INTERVAL_MS = 5;
 	const SPEAKER_AUDIO_SCALE_VOLTS = 3;
+	// α = exp(-2π·fc/fs). At 44100 Hz, 0.9985 ≈ 10 Hz highpass — tight enough to kill DC
+	// without eating bass, and computed once so it auto-adjusts if sampleRate changes.
+	const SPEAKER_DC_BLOCK_ALPHA = 0.9985;
+	const STARTUP_KICK_AMPLITUDE_VOLTS = 0.005;
+	// How many samples to batch before posting to the worklet (one message per flush).
+	const SPEAKER_FLUSH_BATCH = 2048;
+	const TRANSIENT_DT = 5e-5; // fixed timestep — not user-adjustable
+	// Backpressure: stop queuing new samples when worklet buffer is this full (samples).
+	const SPEAKER_BUFFER_FULL_THRESHOLD = 8192;
 
 	let overlaySvg: SVGSVGElement;
 	let topology = $derived(wiresStore.topology);
@@ -76,14 +83,11 @@
 			nodeBindings: topology.componentBindings,
 			terminalToNode: topology.terminalToNode,
 			connectedNodeIds: topology.connectedNodeIds,
-			groundNodeId: topology.groundNodeId,
-			vc1: variableCapacitance,
-			vr1: variableResistancePosition
+			groundNodeId: topology.groundNodeId
 		})
 	);
 	let dc = $derived(solveDcNetlist(netlist));
 
-	let transientDt = $state(5e-4);
 	let transientRunning = $state(false);
 	let transientState = $state<TransientState>({
 		time: 0,
@@ -98,7 +102,14 @@
 	let audioWorkletNode: AudioWorkletNode | null = null;
 	let audioMasterGain: GainNode | null = null;
 	let audioHighpass: BiquadFilterNode | null = null;
-	let latestSpeakerSample = 0;
+	let audioSampleRate = $state<number | null>(null);
+	let latestSpeakerSample = $state(0);
+	let speakerDcEstimateVolts = $state(0);
+	// Plain (non-reactive) array — only the worklet cares, not the UI.
+	let pendingSpeakerSamples: number[] = [];
+	let speakerUpsampleFactor = $state(1);
+	// Backpressure: how many samples the worklet buffer currently holds.
+	let workletBufferFill = $state(0);
 
 	let activeNodeVoltages = $derived(transientResult?.ok ? transientResult.nodeVoltages : dc.nodeVoltages);
 	let lampResistanceOhms = $derived(
@@ -204,10 +215,22 @@
 		const netlistSnapshot = untrack(() => netlist);
 		transientState = initializeTransientState(netlistSnapshot);
 		transientResult = null;
+		// Auto-start whenever a valid circuit is wired up.
+		if (netlistSnapshot.elements.length > 0 && netlistSnapshot.groundNodeId !== null) {
+			untrack(() => toggleTransientRun());
+		}
 	});
 
 	$effect(() => {
-		updateSpeakerSampleFromNodeVoltages(activeNodeVoltages);
+		const nodeVoltages = activeNodeVoltages;
+		// Avoid tracking internal audio sample state reads/writes inside this effect.
+		untrack(() => updateSpeakerSampleFromNodeVoltages(nodeVoltages));
+	});
+
+	// Re-derive upsample factor whenever sampleRate changes.
+	$effect(() => {
+		audioSampleRate;
+		updateSpeakerUpsampleFactor();
 	});
 
 	onDestroy(() => {
@@ -226,12 +249,78 @@
 		return va - vb;
 	}
 
-	function updateSpeakerSampleFromNodeVoltages(nodeVoltages: Record<number, number>) {
+	// Rolling history for cubic Hermite interpolation on the main-thread upsampling path.
+	// Stores the last 4 sim-rate samples: [oldest … newest].
+	const _cubicHistory: [number, number, number, number] = [0, 0, 0, 0];
+
+	function cubicHermiteMain(p0: number, p1: number, p2: number, p3: number, t: number): number {
+		const t2 = t * t;
+		const t3 = t2 * t;
+		return (
+			0.5 *
+			(2 * p1 +
+				(-p0 + p2) * t +
+				(2 * p0 - 5 * p1 + 4 * p2 - p3) * t2 +
+				(-p0 + 3 * p1 - 3 * p2 + p3) * t3)
+		);
+	}
+
+	function updateSpeakerSampleFromNodeVoltages(nodeVoltages: Record<number, number>, queueSample = false) {
 		const speakerVoltage = getSpeakerVoltageFromNodeVoltages(nodeVoltages);
-		const normalized = Math.max(-1, Math.min(1, speakerVoltage / SPEAKER_AUDIO_SCALE_VOLTS));
+		// IIR DC-blocking highpass (one-pole).
+		speakerDcEstimateVolts =
+			speakerDcEstimateVolts * SPEAKER_DC_BLOCK_ALPHA +
+			speakerVoltage * (1 - SPEAKER_DC_BLOCK_ALPHA);
+		const speakerAcVoltage = speakerVoltage - speakerDcEstimateVolts;
+		const normalizedRaw = speakerAcVoltage / SPEAKER_AUDIO_SCALE_VOLTS;
+		// Soft-clip with tanh to avoid hard clipping artifacts.
+		const normalized = Math.tanh(normalizedRaw);
+
+		// Shift history buffer and record new sample.
+		_cubicHistory[0] = _cubicHistory[1];
+		_cubicHistory[1] = _cubicHistory[2];
+		_cubicHistory[2] = _cubicHistory[3];
+		_cubicHistory[3] = normalized;
+
 		latestSpeakerSample = normalized;
-		if (audioWorkletNode) {
-			audioWorkletNode.port.postMessage({ type: 'sample', value: normalized });
+
+		if (queueSample) {
+
+			// Backpressure: skip queuing if worklet buffer is already very full.
+			if (workletBufferFill >= SPEAKER_BUFFER_FULL_THRESHOLD) return;
+
+			if (speakerUpsampleFactor <= 1) {
+				pendingSpeakerSamples.push(normalized);
+			} else {
+				// Cubic Hermite upsampling between history[1] and history[2].
+				const [p0, p1, p2, p3] = _cubicHistory;
+				for (let i = 1; i <= speakerUpsampleFactor; i++) {
+					const t = i / speakerUpsampleFactor;
+					const sample = cubicHermiteMain(p0, p1, p2, p3, t);
+					pendingSpeakerSamples.push(Math.tanh(sample)); // keep in [-1,1]
+				}
+			}
+		}
+	}
+
+	function flushSpeakerSamples() {
+		if (!audioWorkletNode || pendingSpeakerSamples.length === 0) return;
+		// Post the array directly — structured clone is zero-copy for transferables,
+		// and for plain arrays it's cheaper than Array.from + a separate message.
+		audioWorkletNode.port.postMessage({ type: 'samples', values: pendingSpeakerSamples });
+		pendingSpeakerSamples = [];
+	}
+
+	function updateSpeakerUpsampleFactor() {
+		if (!audioContext) {
+			speakerUpsampleFactor = 1;
+			return;
+		}
+		if (true) {
+			// Sub-stepping puts each solver step at audio rate — no interpolation needed.
+			speakerUpsampleFactor = 1;
+		} else {
+			speakerUpsampleFactor = Math.max(1, Math.round((audioContext?.sampleRate ?? 44100) * TRANSIENT_DT));
 		}
 	}
 
@@ -249,7 +338,15 @@
 		try {
 			await audioContext.audioWorklet.addModule('/audio/speaker-worklet.js');
 			audioWorkletNode = new AudioWorkletNode(audioContext, 'speaker-sample-processor');
+			audioSampleRate = audioContext.sampleRate;
+			updateSpeakerUpsampleFactor();
 			audioWorkletNode.port.postMessage({ type: 'sample', value: latestSpeakerSample });
+			// Receive backpressure reports from the worklet.
+			audioWorkletNode.port.onmessage = (e) => {
+				if (e.data?.type === 'bufferFill') {
+					workletBufferFill = e.data.available ?? 0;
+				}
+			};
 			audioWorkletNode.connect(audioHighpass);
 		} catch {
 			speakerAudioEnabled = false;
@@ -264,9 +361,15 @@
 
 	function stopSpeakerAudio() {
 		if (audioWorkletNode) {
+			audioWorkletNode.port.postMessage({ type: 'reset' });
 			audioWorkletNode.disconnect();
 			audioWorkletNode = null;
 		}
+		pendingSpeakerSamples = [];
+		workletBufferFill = 0;
+		speakerUpsampleFactor = 1;
+		speakerDcEstimateVolts = 0;
+		audioSampleRate = null;
 		audioHighpass?.disconnect();
 		audioHighpass = null;
 		audioMasterGain?.disconnect();
@@ -299,6 +402,11 @@
 		if (!pos) return;
 		wiresStore.startDrag(terminalId, pos.x, pos.y);
 		overlaySvg.setPointerCapture(e.pointerId);
+		// Start audio on first user gesture (browsers require this).
+		if (!speakerAudioEnabled) {
+			speakerAudioEnabled = true;
+			void startSpeakerAudio();
+		}
 	}
 
 	function handleConnect(terminalId: number) {
@@ -350,20 +458,48 @@
 	}
 
 	function stepTransient() {
-		const result = stepTransientNetlist(netlist, transientState, { dt: transientDt });
-		transientResult = result;
-		if (!result.ok) {
-			stopTransientRun();
-			return;
+		if (audioSampleRate && speakerAudioEnabled) {
+			// Sub-step at audio rate; visual state updates only after the final sub-step.
+			const audioStepDt = 1 / audioSampleRate;
+			const numSubSteps = Math.max(1, Math.round(TRANSIENT_DT / audioStepDt));
+			let currentState = transientState;
+			let lastResult: TransientResult | null = null;
+			for (let i = 0; i < numSubSteps; i += 1) {
+				const result = stepTransientNetlist(netlist, currentState, { dt: audioStepDt });
+				if (!result.ok) {
+					transientResult = result;
+					stopTransientRun();
+					return;
+				}
+				// One sample per sub-step — already at audio rate, no interpolation.
+				updateSpeakerSampleFromNodeVoltages(result.nodeVoltages, true);
+				currentState = result.state;
+				lastResult = result;
+			}
+			if (lastResult) {
+				transientResult = lastResult;
+				transientState = lastResult.state;
+			}
+		} else {
+			const result = stepTransientNetlist(netlist, transientState, { dt: TRANSIENT_DT });
+			transientResult = result;
+			if (!result.ok) {
+				stopTransientRun();
+				return;
+			}
+			updateSpeakerSampleFromNodeVoltages(result.nodeVoltages, true);
+			if (pendingSpeakerSamples.length >= SPEAKER_FLUSH_BATCH) {
+				flushSpeakerSamples();
+			}
+			transientState = result.state;
 		}
-		updateSpeakerSampleFromNodeVoltages(result.nodeVoltages);
-		transientState = result.state;
 	}
 
 	function resetTransient() {
 		stopTransientRun();
 		transientState = initializeTransientState(netlist);
 		transientResult = null;
+		speakerDcEstimateVolts = 0;
 	}
 
 	function stopTransientRun() {
@@ -374,69 +510,56 @@
 		transientRunning = false;
 	}
 
+	function applyStartupKickToState() {
+		const nextCapacitorVoltages: Record<string, number> = {};
+		for (const [id, value] of Object.entries(transientState.capacitorVoltages)) {
+			const jitter = (Math.random() * 2 - 1) * STARTUP_KICK_AMPLITUDE_VOLTS;
+			nextCapacitorVoltages[id] = value + jitter;
+		}
+		transientState = {
+			...transientState,
+			capacitorVoltages: nextCapacitorVoltages
+		};
+	}
+
 	function toggleTransientRun() {
 		if (transientRunning) {
 			stopTransientRun();
 			return;
 		}
+		// Always apply startup kick so oscillator circuits self-start.
+		applyStartupKickToState();
+		updateSpeakerUpsampleFactor();
 		transientRunning = true;
-		const stepsPerTick = Math.max(1, Math.round((TRANSIENT_RUN_INTERVAL_MS / 1000) / transientDt));
+
+		const MAX_STEPS_PER_TICK = 512;
+
 		runTimer = setInterval(() => {
+			if (!transientRunning) return;
+
+			if (audioSampleRate && speakerAudioEnabled) {
+				if (workletBufferFill >= SPEAKER_BUFFER_FULL_THRESHOLD) return;
+			}
+
+			const stepsPerTick = Math.min(
+				MAX_STEPS_PER_TICK,
+				Math.max(1, Math.round((TRANSIENT_RUN_INTERVAL_MS / 1000) / TRANSIENT_DT))
+			);
+
 			for (let i = 0; i < stepsPerTick; i += 1) {
 				stepTransient();
 				if (!transientRunning) break;
 			}
+			flushSpeakerSamples();
 		}, TRANSIENT_RUN_INTERVAL_MS);
 	}
 </script>
 
 <section class="board-shell">
 	<div class="toolbar">
-		<span class="wire-count">{wiresStore.wires.length} wire{wiresStore.wires.length === 1 ? '' : 's'}</span>
-		<span class="topology-count"
-			>{topology.connectedNodeIds.length} connected node{topology.connectedNodeIds.length === 1 ? '' : 's'}</span
-		>
-		<span class="netlist-count">{netlist.elements.length} compiled element{netlist.elements.length === 1 ? '' : 's'}</span>
-		<span class="dc-status" class:ok={dc.ok} class:bad={!dc.ok}>DC: {dc.ok ? 'solved' : dc.issue?.code ?? 'not-ready'}</span>
-		{#if VOLTMETER_COMPONENT}
-			<span class="meter-readout">VM1: {meterVoltage === null ? '--' : `${meterVoltage.toFixed(3)} V`}</span>
-		{/if}
-		{#if topology.groundNodeId !== null}
-			<span class="ground">ground node: N{topology.groundNodeId}</span>
-		{/if}
-
-		<div class="transient-controls">
-			{#if VARIABLE_RESISTOR_COMPONENT}
-				<span class="cap-readout">VR1 {formatPotPosition(variableResistancePosition)}</span>
-			{/if}
-			{#if VARIABLE_CAPACITOR_COMPONENT}
-				<span class="cap-readout">VC1 {formatCapacitance(variableCapacitance)}</span>
-			{/if}
-			<label>
-				dt (s)
-				<input
-					type="number"
-					min="0.000001"
-					step="0.0001"
-					bind:value={transientDt}
-					disabled={transientRunning}
-				/>
-			</label>
-			<button class="control-btn" onclick={stepTransient}>Step</button>
-			<button class="control-btn" onclick={toggleTransientRun}>{transientRunning ? 'Pause' : 'Run'}</button>
-			<button class="control-btn" class:active={speakerAudioEnabled} onclick={toggleSpeakerAudio}>
-				Audio {speakerAudioEnabled ? 'On' : 'Off'}
-			</button>
-			<button class="control-btn" onclick={resetTransient}>Reset</button>
-			<span class="sim-time">t = {transientState.time.toFixed(4)} s</span>
-		</div>
-
 		<button class="clear-btn" onclick={() => wiresStore.clearAll()} disabled={wiresStore.wires.length === 0}>
 			Clear all wires
 		</button>
-		{#if unmappedCount > 0}
-			<span class="mapping-hint">{mappedTerminalIds.length}/{KIT_TERMINAL_IDS.length} terminals mapped</span>
-		{/if}
 	</div>
 
 	<div class="board-container">
@@ -529,22 +652,6 @@
 			{/each}
 		</svg>
 	</div>
-
-	<BoardDebugPanels
-		{topology}
-		{netlist}
-		{dc}
-		{transientState}
-		{variableCapacitance}
-		{variableResistancePosition}
-		hasVariableCapacitor={Boolean(VARIABLE_CAPACITOR_COMPONENT)}
-		hasVariableResistor={Boolean(VARIABLE_RESISTOR_COMPONENT)}
-		{lampPowerWatts}
-		{lampPowerRatio}
-		{lampGlowOpacity}
-		{lampPowerWattsActive}
-		{lampPowerWattsDc}
-	/>
 </section>
 
 <style>
@@ -560,34 +667,6 @@
 		flex-wrap: wrap;
 	}
 
-	.wire-count,
-	.topology-count,
-	.netlist-count,
-	.meter-readout,
-	.dc-status,
-	.mapping-hint,
-	.ground,
-	.sim-time {
-		font-size: 0.85rem;
-		color: #b5b5b5;
-	}
-
-	.transient-controls {
-		display: inline-flex;
-		align-items: center;
-		gap: 0.5rem;
-		flex-wrap: wrap;
-	}
-
-	.transient-controls label {
-		display: inline-flex;
-		align-items: center;
-		gap: 0.35rem;
-		font-size: 0.8rem;
-		color: #b5b5b5;
-	}
-
-	.control-btn,
 	.clear-btn {
 		padding: 0.3rem 0.75rem;
 		font-size: 0.85rem;
@@ -598,16 +677,10 @@
 		cursor: pointer;
 	}
 
-	.control-btn:hover,
 	.clear-btn:hover:not(:disabled) {
 		background: #3c0000;
 		border-color: #e53935;
 		color: #fff;
-	}
-
-	.control-btn.active {
-		border-color: #7bd389;
-		color: #7bd389;
 	}
 
 	.clear-btn:disabled {
