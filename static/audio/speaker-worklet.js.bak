@@ -1,0 +1,51 @@
+/* global AudioWorkletProcessor, registerProcessor */
+/// <reference lib="WebWorker" />
+/// <reference lib="DOM" />
+class SpeakerSampleProcessor extends AudioWorkletProcessor {
+	constructor() {
+		super();
+		this.currentSample = 0;
+		this.samples = [];
+		this.sampleReadIndex = 0;
+		this.port.onmessage = (event) => {
+			if (!event.data) return;
+			if (event.data.type === 'samples' && Array.isArray(event.data.values)) {
+				for (const raw of event.data.values) {
+					const value = Number(raw);
+					if (Number.isFinite(value)) {
+						this.samples.push(Math.max(-1, Math.min(1, value)));
+					}
+				}
+				return;
+			}
+			if (event.data.type === 'sample') {
+				const value = Number(event.data.value);
+				if (Number.isFinite(value)) {
+					this.currentSample = Math.max(-1, Math.min(1, value));
+				}
+			}
+		};
+	}
+
+	process(inputs, outputs) {
+		const output = outputs[0];
+		for (let channel = 0; channel < output.length; channel += 1) {
+			const channelOut = output[channel];
+			for (let i = 0; i < channelOut.length; i += 1) {
+				if (this.sampleReadIndex < this.samples.length) {
+					this.currentSample = this.samples[this.sampleReadIndex];
+					this.sampleReadIndex += 1;
+				}
+				channelOut[i] = this.currentSample;
+			}
+		}
+		if (this.sampleReadIndex >= this.samples.length) {
+			this.samples = [];
+			this.sampleReadIndex = 0;
+		}
+		return true;
+	}
+}
+
+registerProcessor('speaker-sample-processor', SpeakerSampleProcessor);
+
