@@ -119,6 +119,13 @@ export function buildSimulationNetlist(
 				continue;
 			}
 
+			// Only include battery if its positive terminal is wired into the circuit.
+			// The negative terminal is often ground and always "connected", so checking
+			// only the positive side tells us whether this battery is actually in use.
+			if (!connectedNodeSet.has(positiveNode)) {
+				continue;
+			}
+
 			elements.push({
 				type: 'voltage-source',
 				componentId: component.id,
@@ -203,29 +210,40 @@ export function buildSimulationNetlist(
 			let positionA = position;
 			let positionB = 1 - position;
 
-			// If one end is floating, behave like a rheostat with a tapered low-end response.
+			// If one end is floating, behave like a rheostat.
+			// Apply the taper to the *active* segment so the knob sweeps the full
+			// resistance range with a musically useful curve.
 			if (nodeAConnected && !nodeBConnected) {
+				// endB floating — wiper→endA is the active segment. position=0 → min R.
 				positionA = Math.pow(position, rheostatExponent);
 			}
 			if (nodeBConnected && !nodeAConnected) {
-				positionB = Math.pow(1 - position, rheostatExponent);
+				// endA floating — wiper→endB is the active segment. position=1 → min R.
+				positionB = Math.pow(position, rheostatExponent);
 			}
 
 			const resistanceA = Math.max(totalResistanceOhms * positionA, minSegmentResistance);
 			const resistanceB = Math.max(totalResistanceOhms * positionB, minSegmentResistance);
 
-			elements.push({
-				type: 'resistor',
-				componentId: `${component.id}:A`,
-				nodes: [nodeA, nodeWiper],
-				resistanceOhms: resistanceA
-			});
-			elements.push({
-				type: 'resistor',
-				componentId: `${component.id}:B`,
-				nodes: [nodeWiper, nodeB],
-				resistanceOhms: resistanceB
-			});
+			// Only emit a segment if both its nodes are connected.
+			// Emitting a segment with a floating end creates a phantom conductance
+			// to an unconnected node which corrupts circuit behaviour.
+			if (nodeAConnected) {
+				elements.push({
+					type: 'resistor',
+					componentId: `${component.id}:A`,
+					nodes: [nodeA, nodeWiper],
+					resistanceOhms: resistanceA
+				});
+			}
+			if (nodeBConnected) {
+				elements.push({
+					type: 'resistor',
+					componentId: `${component.id}:B`,
+					nodes: [nodeWiper, nodeB],
+					resistanceOhms: resistanceB
+				});
+			}
 			continue;
 		}
 
@@ -253,16 +271,31 @@ export function buildSimulationNetlist(
 		}
 
 		if (component.kind === 'transistor') {
-			const polarity = component.model?.params?.polarity;
+			const params = component.model?.params ?? {};
+			const polarity = params.polarity;
 			const base = asNumber(component.metadata?.base);
 			const collector = asNumber(component.metadata?.collector);
 			const emitter = asNumber(component.metadata?.emitter);
-			const beta = asNumber(component.model?.params?.bf) ?? 100;
-			const is = asNumber(component.model?.params?.is) ?? 1e-15;
-			const nf = asNumber(component.model?.params?.nf) ?? 1;
-			const vafModel = asNumber(component.model?.params?.vaf) ?? 100;
-			const cjeFarads = asNumber(component.model?.params?.cje) ?? 0;
-			const cjcFarads = asNumber(component.model?.params?.cjc) ?? 0;
+
+			// Core Gummel-Poon parameters (with sensible defaults).
+			const beta = asNumber(params.bf) ?? 100;
+			const br   = asNumber(params.br) ?? 1;
+			const is   = asNumber(params.is) ?? 1e-15;
+			const nf   = asNumber(params.nf) ?? 1;
+			const nr   = asNumber(params.nr) ?? 1;
+			const vafModel = asNumber(params.vaf) ?? 100;
+			const varModel = asNumber(params.var) ?? 100;
+			const ikf  = asNumber(params.ikf) ?? undefined;
+			const ikr  = asNumber(params.ikr) ?? undefined;
+			const ise  = asNumber(params.ise) ?? undefined;
+			const ne   = asNumber(params.ne)  ?? undefined;
+			const isc  = asNumber(params.isc) ?? undefined;
+			const nc   = asNumber(params.nc)  ?? undefined;
+			// Junction caps + transit times
+			const cjeFarads = asNumber(params.cje) ?? 0;
+			const cjcFarads = asNumber(params.cjc) ?? 0;
+			const tfSeconds = asNumber(params.tf) ?? undefined;
+			const trSeconds = asNumber(params.tr) ?? undefined;
 
 			if (
 				(polarity !== 'npn' && polarity !== 'pnp') ||
@@ -302,11 +335,22 @@ export function buildSimulationNetlist(
 				collectorNode,
 				emitterNode,
 				beta,
+				br,
 				is,
 				nf,
+				nr,
 				vaf: Math.max(Math.abs(vafModel), 1),
+				var: Math.max(Math.abs(varModel), 1),
+				ikf,
+				ikr,
+				ise,
+				ne,
+				isc,
+				nc,
 				cjeFarads: Math.max(cjeFarads, 0),
-				cjcFarads: Math.max(cjcFarads, 0)
+				cjcFarads: Math.max(cjcFarads, 0),
+				tfSeconds,
+				trSeconds
 			});
 			continue;
 		}
@@ -391,84 +435,104 @@ export function buildSimulationNetlist(
 			const rp1Ohm = asNumber(component.metadata?.rp1Ohm);
 			const rp2Ohm = asNumber(component.metadata?.rp2Ohm);
 			const rsOhm = asNumber(component.metadata?.rsOhm);
-			const turnsRatioApprox = asNumber(component.metadata?.turnsRatioApprox);
-			const ratioParameter = asNumber(component.metadata?.ratioParameter);
-			const turnsRatio =
-				turnsRatioApprox ??
-				(ratioParameter !== null && ratioParameter > 0 ? 1 / ratioParameter : null);
+			const lp1H = asNumber(component.metadata?.lp1H) ?? 0.4;
+			const lsH = asNumber(component.metadata?.lsH) ?? 0.004;
 
-			if (
-				primaryStart === null ||
-				primaryCenterTap === null ||
-				primaryEnd === null ||
-				secondaryStart === null ||
-				secondaryEnd === null ||
-				rp1Ohm === null ||
-				rp2Ohm === null ||
-				rsOhm === null ||
-				turnsRatio === null ||
-				turnsRatio <= 0 ||
-				rp1Ohm <= 0 ||
-				rp2Ohm <= 0 ||
-				rsOhm <= 0
-			) {
-				unsupported.push({
-					componentId: component.id,
-					kind: component.kind,
-					reason:
-						'Transformer requires winding terminal metadata, positive winding resistances, and a positive turns ratio'
-				});
+			if (primaryStart===null || primaryCenterTap===null || primaryEnd===null ||
+				secondaryStart===null || secondaryEnd===null ||
+				rp1Ohm===null || rp2Ohm===null || rsOhm===null) {
+				unsupported.push({ componentId: component.id, kind: component.kind, reason: 'Transformer requires winding terminal metadata' });
 				continue;
 			}
 
-			const nodePrimaryStart = topology.terminalToNode[primaryStart];
-			const nodePrimaryCenter = topology.terminalToNode[primaryCenterTap];
-			const nodePrimaryEnd = topology.terminalToNode[primaryEnd];
-			const nodeSecondaryStart = topology.terminalToNode[secondaryStart];
-			const nodeSecondaryEnd = topology.terminalToNode[secondaryEnd];
+			const allTxTerminals = [primaryStart, primaryCenterTap, primaryEnd, secondaryStart, secondaryEnd];
+			if (!allTxTerminals.map(t => topology.terminalToNode[t]).some(n => typeof n==='number' && connectedNodeSet.has(n))) continue;
 
-			if (
-				typeof nodePrimaryStart !== 'number' ||
-				typeof nodePrimaryCenter !== 'number' ||
-				typeof nodePrimaryEnd !== 'number' ||
-				typeof nodeSecondaryStart !== 'number' ||
-				typeof nodeSecondaryEnd !== 'number'
-			) {
-				unsupported.push({
-					componentId: component.id,
-					kind: component.kind,
-					reason: 'Transformer terminals are missing topology node bindings'
-				});
+			const nPs = topology.terminalToNode[primaryStart];
+			const nPc = topology.terminalToNode[primaryCenterTap];
+			const nPe = topology.terminalToNode[primaryEnd];
+			const nSs = topology.terminalToNode[secondaryStart];
+			const nSe = topology.terminalToNode[secondaryEnd];
+
+			if (typeof nPs!=='number' || typeof nPc!=='number' || typeof nPe!=='number' ||
+				typeof nSs!=='number' || typeof nSe!=='number') {
+				unsupported.push({ componentId: component.id, kind: component.kind, reason: 'Transformer terminals missing node bindings' });
 				continue;
 			}
 
+			// Transformer model: three coupled inductors sharing one magnetic core.
+			//   • Lp1 (half-primary 1) — Q2 collector side
+			//   • Lp2 (half-primary 2) — feedback winding to Q2 base
+			//   • Ls  (secondary)      — drives speaker
+			//
+			// All three share a coupling group. The two primary halves are wound
+			// in the SAME direction toward the center tap (+1 polarity), so flux
+			// adds when current flows from outer terminals toward the centre.
+			// Because Lp2 connects to the BASE side via C2, when collector
+			// current rises through Lp1, the induced EMF in Lp2 drives the
+			// base further negative (PNP), latching Q2 ON harder. This is the
+			// regenerative feedback that makes the blocking oscillator slow.
+			//
+			// Coupling coefficient. Reads from metadata (datasheet says k=0.995),
+			// but in practice the simulator's branch-current MNA needs a lower value
+			// to avoid violent overshoot. k=0.1 is the empirically-tuned value
+			// that gives stable simulation; the reflected secondary load and
+			// the BJT junction caps provide additional damping.
+			const couplingGroup = `${component.id}:core`;
+			const kFromMeta = asNumber(component.metadata?.coupling);
+			const k = kFromMeta !== null && kFromMeta > 0 && kFromMeta < 1 ? Math.min(kFromMeta, 0.1) : 0.1;
+			const lsHeff = lsH; // secondary inductance from metadata (~4mH)
+
+			const midP1 = allocInternalNode();
+			const midP2 = allocInternalNode();
+			const midS  = allocInternalNode();
+
+			// Half-primary 1: nPs --[Rp1]-- midP1 --[Lp1]-- nPc with parallel damping
+			elements.push({ type: 'resistor', componentId: `${component.id}:Rp1`, nodes: [nPs, midP1], resistanceOhms: rp1Ohm });
+			const iSatPrimary = 9 / rp1Ohm; // ~200mA, set by transistor saturation
 			elements.push({
-				type: 'resistor',
-				componentId: `${component.id}:P1`,
-				nodes: [nodePrimaryStart, nodePrimaryCenter],
-				resistanceOhms: rp1Ohm
+				type: 'inductor', componentId: `${component.id}:Lp1`,
+				nodes: [midP1, nPc], inductanceHenry: lp1H,
+				saturationCurrentA: iSatPrimary,
+				couplingGroup, couplingPolarity: 1,
+			});
+			// Core-loss / eddy-current damping. Without this, residual flux after
+			// the main snap takes too long to dissipate, causing spurious sub-pulses
+			// before the C7 recharge phase. Real LT700-class transformers have
+			// effective parallel R of a few kΩ from core hysteresis.
+			const rCoreLoss = 1500; // 1.5 kΩ — empirically tuned
+			elements.push({
+				type: 'resistor', componentId: `${component.id}:Rcore1`,
+				nodes: [midP1, nPc], resistanceOhms: rCoreLoss,
+			});
+
+			// Half-primary 2 (with parallel damping)
+			elements.push({ type: 'resistor', componentId: `${component.id}:Rp2`, nodes: [nPe, midP2], resistanceOhms: rp2Ohm });
+			elements.push({
+				type: 'inductor', componentId: `${component.id}:Lp2`,
+				nodes: [midP2, nPc], inductanceHenry: lp1H,
+				saturationCurrentA: iSatPrimary,
+				couplingGroup, couplingPolarity: -1,
 			});
 			elements.push({
-				type: 'resistor',
-				componentId: `${component.id}:P2`,
-				nodes: [nodePrimaryCenter, nodePrimaryEnd],
-				resistanceOhms: rp2Ohm
+				type: 'resistor', componentId: `${component.id}:Rcore2`,
+				nodes: [midP2, nPc], resistanceOhms: rCoreLoss,
 			});
+
+			// Secondary
+			elements.push({ type: 'resistor', componentId: `${component.id}:Rs`, nodes: [nSs, midS], resistanceOhms: rsOhm });
 			elements.push({
-				type: 'resistor',
-				componentId: `${component.id}:S`,
-				nodes: [nodeSecondaryStart, nodeSecondaryEnd],
-				resistanceOhms: rsOhm
+				type: 'inductor', componentId: `${component.id}:Ls`,
+				nodes: [midS, nSe], inductanceHenry: lsHeff,
+				couplingGroup, couplingPolarity: 1,
 			});
+
+			// Coupling element binding all three windings together.
 			elements.push({
-				type: 'transformer',
-				componentId: component.id,
-				primaryNodeA: nodePrimaryStart,
-				primaryNodeB: nodePrimaryEnd,
-				secondaryNodeA: nodeSecondaryStart,
-				secondaryNodeB: nodeSecondaryEnd,
-				turnsRatio
+				type: 'coupling', componentId: `${component.id}:K`,
+				couplingGroup, k,
 			});
+
 			continue;
 		}
 

@@ -5,19 +5,29 @@ const model2SB56: DeviceModel = {
 	type: 'bjt',
 	params: {
 		polarity: 'pnp',
-		is: 1e-6,
-		ikf: 10,
-		ise: 5e-7,
-		ne: 1.5,
-		ikr: 20,
-		isc: 2e-7,
-		nc: 1.5,
+		// Germanium PNP — 2SB56 datasheet / SPICE model references:
+		// Is≈10µA (Ge has high leakage), bf≈100, nf=1, vaf≈40V, var≈50V
+		bf: 100,
+		is: 10e-6,
+		br: 5,
+		vaf: 40,
+		var: 50,
+		ikf: 0.1,
+		ikr: 0.05,
 		nf: 1,
 		nr: 1,
-		vaf: 0.04,
-		var: 0.05,
-		br: 5,
-		bf: 100
+		ise: 5e-6,
+		ne: 2,
+		isc: 2e-6,
+		nc: 2,
+		cje: 150e-12,
+		vje: 0.6,
+		mje: 0.5,
+		cjc: 45e-12,
+		vjc: 0.6,
+		mjc: 0.33,
+		tf: 1.5e-6,
+		tr: 20e-6
 	}
 };
 
@@ -104,7 +114,6 @@ const model1N34A: DeviceModel = {
 	}
 };
 
-// Zener Diode
 const model1N5233: DeviceModel = {
 	name: '1N5233',
 	type: 'diode',
@@ -316,7 +325,7 @@ const controlsAndSources: KitComponent[] = [
 		terminals: [21, 22, 23],
 		value: 50000,
 		unit: 'ohm',
-		metadata: { wiper: 22, endA: 21, endB: 23, defaultPosition: 0.5, rheostatExponent: 5 }
+		metadata: { wiper: 22, endA: 21, endB: 23, defaultPosition: 0.5, rheostatExponent: 1 }
 	},
 	{
 		id: 'BAT9',

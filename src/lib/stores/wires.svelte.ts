@@ -27,6 +27,8 @@ function makeStore() {
 		currentX: 0,
 		currentY: 0
 	});
+	// Cached: recomputes only when wires changes, not on every access.
+	let _topology = $derived(buildCircuitTopology(wires, KIT_COMPONENTS));
 
 	return {
 		get wires() {
@@ -36,7 +38,7 @@ function makeStore() {
 			return drag;
 		},
 		get topology() {
-			return buildCircuitTopology(wires, KIT_COMPONENTS);
+			return _topology;
 		},
 		startDrag(fromTerminal: number, x: number, y: number) {
 			drag.active = true;
@@ -88,6 +90,25 @@ function makeStore() {
 		clearAll() {
 			wires.length = 0;
 			colorIndex = 0;
+		},
+		loadWires(newWires: Array<{ fromTerminal: number; toTerminal: number }>) {
+			wires.length = 0;
+			colorIndex = 0;
+			for (const { fromTerminal, toTerminal } of newWires) {
+				const exists = wires.some(
+					(w) =>
+						(w.fromTerminal === fromTerminal && w.toTerminal === toTerminal) ||
+						(w.fromTerminal === toTerminal && w.toTerminal === fromTerminal)
+				);
+				if (!exists) {
+					wires.push({
+						id: crypto.randomUUID(),
+						fromTerminal,
+						toTerminal,
+						color: nextColor()
+					});
+				}
+			}
 		}
 	};
 }

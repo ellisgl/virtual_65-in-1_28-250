@@ -10,6 +10,7 @@
 	import VoltmeterOverlay from '$lib/components/board/VoltmeterOverlay.svelte';
 	import {
 		buildSimulationNetlist,
+		compileNetlist,
 		initializeTransientState,
 		solveDcNetlist,
 		stepTransientNetlist
@@ -55,14 +56,23 @@
 	const LAMP_GLOW_MAX = 1;
 	const TRANSIENT_RUN_INTERVAL_MS = 5;
 	const SPEAKER_AUDIO_SCALE_VOLTS = 3;
-	// α = exp(-2π·fc/fs). At 44100 Hz, 0.9985 ≈ 10 Hz highpass — tight enough to kill DC
-	// without eating bass, and computed once so it auto-adjusts if sampleRate changes.
 	const SPEAKER_DC_BLOCK_ALPHA = 0.9985;
 	const STARTUP_KICK_AMPLITUDE_VOLTS = 0.005;
-	// How many samples to batch before posting to the worklet (one message per flush).
 	const SPEAKER_FLUSH_BATCH = 2048;
-	const TRANSIENT_DT = 5e-5; // fixed timestep — not user-adjustable
-	// Backpressure: stop queuing new samples when worklet buffer is this full (samples).
+
+	// Adaptive timestep bounds (seconds). GEAR-2 adjusts dt within these limits based on LTE.
+	const DT_MIN = 1e-6;    // 1µs  — captures fast transformer pulses
+	const DT_MAX = 0.5e-3;  // 0.5ms — must capture audio-frequency oscillations (~250 Hz+)
+	const DT_INIT = 10e-6;  // 10µs — conservative start
+
+	// How much simulated time to advance per real 5ms tick.
+	const SIM_TIME_PER_TICK = TRANSIENT_RUN_INTERVAL_MS / 1000;
+	const MAX_SUBSTEPS_PER_TICK = 2000; // safety cap
+
+	// Current adaptive timestep, updated by solver each step.
+	let adaptiveDt = $state(DT_INIT);
+
+	// Backpressure: stop queuing new samples when worklet buffer is this full.
 	const SPEAKER_BUFFER_FULL_THRESHOLD = 8192;
 
 	let overlaySvg: SVGSVGElement;
@@ -77,6 +87,9 @@
 			switchStates
 		})
 	);
+	// Pre-compiled static netlist data — recomputed only when the netlist changes,
+	// not on every simulation step. Eliminates per-step allocation overhead.
+	let compiledNetlist = $derived(compileNetlist(netlist));
 	// Only reset transient state when topology/continuous controls change, not momentary key state.
 	let transientResetKey = $derived(
 		JSON.stringify({
@@ -210,13 +223,17 @@
 	);
 
 	$effect(() => {
-		transientResetKey;
+		transientResetKey; // only topology changes trigger a full reset + restart
+		const wasRunning = untrack(() => transientRunning);
 		stopTransientRun();
 		const netlistSnapshot = untrack(() => netlist);
-		transientState = initializeTransientState(netlistSnapshot);
+		const dcSnapshot = untrack(() => dc);
+		transientState = initializeTransientState(
+			netlistSnapshot,
+			dcSnapshot.ok ? dcSnapshot.nodeVoltages : undefined
+		);
 		transientResult = null;
-		// Auto-start whenever a valid circuit is wired up.
-		if (netlistSnapshot.elements.length > 0 && netlistSnapshot.groundNodeId !== null) {
+		if (wasRunning && netlistSnapshot.elements.length > 0 && netlistSnapshot.groundNodeId !== null) {
 			untrack(() => toggleTransientRun());
 		}
 	});
@@ -239,14 +256,35 @@
 	});
 
 	function getSpeakerVoltageFromNodeVoltages(nodeVoltages: Record<number, number>): number {
-		if (!SPEAKER_COMPONENT || SPEAKER_COMPONENT.terminals.length < 2) return 0;
-		const nodeA = topology.terminalToNode[SPEAKER_COMPONENT.terminals[0]];
-		const nodeB = topology.terminalToNode[SPEAKER_COMPONENT.terminals[1]];
-		if (typeof nodeA !== 'number' || typeof nodeB !== 'number') return 0;
-		const va = nodeVoltages[nodeA];
-		const vb = nodeVoltages[nodeB];
-		if (typeof va !== 'number' || typeof vb !== 'number') return 0;
-		return va - vb;
+		// First try reading the speaker terminals directly (when transformer secondary is driven).
+		if (SPEAKER_COMPONENT && SPEAKER_COMPONENT.terminals.length >= 2) {
+			const nodeA = topology.terminalToNode[SPEAKER_COMPONENT.terminals[0]];
+			const nodeB = topology.terminalToNode[SPEAKER_COMPONENT.terminals[1]];
+			if (typeof nodeA === 'number' && typeof nodeB === 'number') {
+				const va = nodeVoltages[nodeA];
+				const vb = nodeVoltages[nodeB];
+				if (typeof va === 'number' && typeof vb === 'number') {
+					const spkV = va - vb;
+					if (Math.abs(spkV) > 0.001) return spkV;
+				}
+			}
+		}
+		// Fallback: use T1 primary half-1 node (Q2 collector side) as audio source.
+		// This is the node that swings during blocking oscillator firing.
+		// Terminal 70 = T1 primary start = Q2 collector connection.
+		const T1_primaryStart = 70;
+		const T1_centerTap = 71;
+		const nPs = topology.terminalToNode[T1_primaryStart];
+		const nPc = topology.terminalToNode[T1_centerTap];
+		if (typeof nPs === 'number' && typeof nPc === 'number') {
+			const va = nodeVoltages[nPs];
+			const vb = nodeVoltages[nPc];
+			if (typeof va === 'number' && typeof vb === 'number') {
+				// Scale by 1/n (n=10) to approximate transformer step-down to speaker level
+				return (va - vb) / 10;
+			}
+		}
+		return 0;
 	}
 
 	// Rolling history for cubic Hermite interpolation on the main-thread upsampling path.
@@ -265,42 +303,14 @@
 		);
 	}
 
-	function updateSpeakerSampleFromNodeVoltages(nodeVoltages: Record<number, number>, queueSample = false) {
+	function updateSpeakerSampleFromNodeVoltages(nodeVoltages: Record<number, number>, _queueSample = false) {
 		const speakerVoltage = getSpeakerVoltageFromNodeVoltages(nodeVoltages);
-		// IIR DC-blocking highpass (one-pole).
 		speakerDcEstimateVolts =
 			speakerDcEstimateVolts * SPEAKER_DC_BLOCK_ALPHA +
 			speakerVoltage * (1 - SPEAKER_DC_BLOCK_ALPHA);
 		const speakerAcVoltage = speakerVoltage - speakerDcEstimateVolts;
 		const normalizedRaw = speakerAcVoltage / SPEAKER_AUDIO_SCALE_VOLTS;
-		// Soft-clip with tanh to avoid hard clipping artifacts.
-		const normalized = Math.tanh(normalizedRaw);
-
-		// Shift history buffer and record new sample.
-		_cubicHistory[0] = _cubicHistory[1];
-		_cubicHistory[1] = _cubicHistory[2];
-		_cubicHistory[2] = _cubicHistory[3];
-		_cubicHistory[3] = normalized;
-
-		latestSpeakerSample = normalized;
-
-		if (queueSample) {
-
-			// Backpressure: skip queuing if worklet buffer is already very full.
-			if (workletBufferFill >= SPEAKER_BUFFER_FULL_THRESHOLD) return;
-
-			if (speakerUpsampleFactor <= 1) {
-				pendingSpeakerSamples.push(normalized);
-			} else {
-				// Cubic Hermite upsampling between history[1] and history[2].
-				const [p0, p1, p2, p3] = _cubicHistory;
-				for (let i = 1; i <= speakerUpsampleFactor; i++) {
-					const t = i / speakerUpsampleFactor;
-					const sample = cubicHermiteMain(p0, p1, p2, p3, t);
-					pendingSpeakerSamples.push(Math.tanh(sample)); // keep in [-1,1]
-				}
-			}
-		}
+		latestSpeakerSample = Math.tanh(normalizedRaw);
 	}
 
 	function flushSpeakerSamples() {
@@ -320,7 +330,7 @@
 			// Sub-stepping puts each solver step at audio rate — no interpolation needed.
 			speakerUpsampleFactor = 1;
 		} else {
-			speakerUpsampleFactor = Math.max(1, Math.round((audioContext?.sampleRate ?? 44100) * TRANSIENT_DT));
+			speakerUpsampleFactor = Math.max(1, Math.round((audioContext?.sampleRate ?? 44100) * DT_INIT));
 		}
 	}
 
@@ -339,6 +349,11 @@
 			await audioContext.audioWorklet.addModule('/audio/speaker-worklet.js');
 			audioWorkletNode = new AudioWorkletNode(audioContext, 'speaker-sample-processor');
 			audioSampleRate = audioContext.sampleRate;
+			// Reset the resampler timing — the next audio sample should be due
+			// one period after audio enables, regardless of where sim-time is.
+			audioSimTime = 0;
+			audioNextSampleTime = 1 / audioSampleRate;
+			audioPrevSpkV = getSpeakerVoltageFromNodeVoltages(transientState.nodeVoltages);
 			updateSpeakerUpsampleFactor();
 			audioWorkletNode.port.postMessage({ type: 'sample', value: latestSpeakerSample });
 			// Receive backpressure reports from the worklet.
@@ -370,6 +385,9 @@
 		speakerUpsampleFactor = 1;
 		speakerDcEstimateVolts = 0;
 		audioSampleRate = null;
+		audioSimTime = 0;
+		audioNextSampleTime = 0;
+		audioPrevSpkV = 0;
 		audioHighpass?.disconnect();
 		audioHighpass = null;
 		audioMasterGain?.disconnect();
@@ -387,6 +405,45 @@
 		} else {
 			stopSpeakerAudio();
 		}
+	}
+
+	function saveWires() {
+		const lines = wiresStore.wires.map((w) => `${w.fromTerminal}-${w.toTerminal}`);
+		const text = lines.join('\n');
+		const blob = new Blob([text], { type: 'text/plain' });
+		const url = URL.createObjectURL(blob);
+		const a = document.createElement('a');
+		a.href = url;
+		a.download = 'circuit.txt';
+		a.click();
+		URL.revokeObjectURL(url);
+	}
+
+	function loadWires(e: Event) {
+		const input = e.target as HTMLInputElement;
+		const file = input.files?.[0];
+		if (!file) return;
+		const reader = new FileReader();
+		reader.onload = () => {
+			const text = reader.result as string;
+			const pairs: Array<{ fromTerminal: number; toTerminal: number }> = [];
+			for (const rawLine of text.split('\n')) {
+				const line = rawLine.trim();
+				if (!line || line.startsWith('#')) continue;
+				// Each line is one or more terminals joined by '-', e.g. "13-23" or "14-71-87"
+				// Multi-terminal lines mean every terminal in the group is connected,
+				// which we represent as a chain of wires: 14→71, 71→87.
+				const parts = line.split('-').map((p) => parseInt(p.trim(), 10));
+				if (parts.some(isNaN)) continue;
+				for (let i = 0; i < parts.length - 1; i++) {
+					pairs.push({ fromTerminal: parts[i], toTerminal: parts[i + 1] });
+				}
+			}
+			wiresStore.loadWires(pairs);
+		};
+		reader.readAsText(file);
+		// Reset so the same file can be re-loaded if needed.
+		input.value = '';
 	}
 
 	function toSvgCoords(e: PointerEvent): { x: number; y: number } {
@@ -457,49 +514,137 @@
 		wiresStore.removeByTerminal(terminalId);
 	}
 
-	function stepTransient() {
-		if (audioSampleRate && speakerAudioEnabled) {
-			// Sub-step at audio rate; visual state updates only after the final sub-step.
-			const audioStepDt = 1 / audioSampleRate;
-			const numSubSteps = Math.max(1, Math.round(TRANSIENT_DT / audioStepDt));
-			let currentState = transientState;
-			let lastResult: TransientResult | null = null;
-			for (let i = 0; i < numSubSteps; i += 1) {
-				const result = stepTransientNetlist(netlist, currentState, { dt: audioStepDt });
-				if (!result.ok) {
-					transientResult = result;
-					stopTransientRun();
-					return;
-				}
-				// One sample per sub-step — already at audio rate, no interpolation.
-				updateSpeakerSampleFromNodeVoltages(result.nodeVoltages, true);
-				currentState = result.state;
-				lastResult = result;
-			}
-			if (lastResult) {
-				transientResult = lastResult;
-				transientState = lastResult.state;
-			}
-		} else {
-			const result = stepTransientNetlist(netlist, transientState, { dt: TRANSIENT_DT });
-			transientResult = result;
+	// Audio resampler state — maintains continuous "next audio sample time"
+	// across calls to stepTransient. Critical: solver steps happen at irregular
+	// dt (1µs during pulse, 50ms during quiet); we must produce samples at
+	// the fixed audio rate to avoid worklet over/underruns.
+	let audioSimTime = 0;        // total sim-time elapsed when audio started
+	let audioNextSampleTime = 0; // sim-time at which the next audio sample is due
+	let audioPrevSpkV = 0;       // speaker voltage at the previous solver step
+
+	// Wall-clock pacing state. The simulator must keep sim-time aligned with
+	// wall-time so the audio sample stream stays at 44.1kHz wall-clock rate.
+	// If a tick is delayed (because a pulse phase took longer than 5ms wall),
+	// the next call advances proportionally MORE sim-time to catch up.
+	let lastTickWallTime = 0;        // wall-time of the previous successful tick
+	const MAX_CATCHUP_SIMTIME = 0.05;  // hard cap on catch-up per tick (50ms)
+
+	function stepTransient(simTimeBudget: number) {
+		// Advance the simulator by AT MOST `simTimeBudget` seconds of sim-time.
+		// Adaptive sub-stepping: GEAR-2 varies dt between DT_MIN and DT_MAX
+		// based on LTE feedback. Audio samples are emitted on the fixed
+		// audioPeriod grid via linear interpolation.
+		let currentState = transientState;
+		let lastResult: TransientResult | null = null;
+		let simTimeAdvanced = 0;
+		let substeps = 0;
+		let dt = Math.max(DT_MIN, Math.min(DT_MAX, adaptiveDt));
+
+		const audioPeriod = audioSampleRate ? 1 / audioSampleRate : 0;
+		const maxSubsteps = MAX_SUBSTEPS_PER_TICK * Math.max(1, Math.ceil(simTimeBudget / SIM_TIME_PER_TICK));
+
+		while (simTimeAdvanced < simTimeBudget && substeps < maxSubsteps) {
+			const stepDt = Math.min(dt, simTimeBudget - simTimeAdvanced);
+
+			const result = stepTransientNetlist(
+				netlist, currentState, { dt: stepDt, gear: 2 }, compiledNetlist ?? undefined
+			);
 			if (!result.ok) {
+				transientResult = result;
 				stopTransientRun();
 				return;
 			}
-			updateSpeakerSampleFromNodeVoltages(result.nodeVoltages, true);
-			if (pendingSpeakerSamples.length >= SPEAKER_FLUSH_BATCH) {
-				flushSpeakerSamples();
+
+			currentState = result.state;
+			lastResult = result;
+
+			// Audio resampling: emit fixed-rate samples by interpolating between
+			// the previous step's speaker voltage and this step's voltage.
+			if (speakerAudioEnabled && audioSampleRate && audioPeriod > 0) {
+				const stepStartTime = audioSimTime + simTimeAdvanced;
+				const stepEndTime = stepStartTime + stepDt;
+				const spkVNew = getSpeakerVoltageFromNodeVoltages(result.nodeVoltages);
+
+				while (audioNextSampleTime <= stepEndTime) {
+					if (audioNextSampleTime < stepStartTime) {
+						audioNextSampleTime = stepStartTime;
+					}
+					const alpha = stepDt > 0 ? (audioNextSampleTime - stepStartTime) / stepDt : 0;
+					const spkV = audioPrevSpkV + (spkVNew - audioPrevSpkV) * alpha;
+					speakerDcEstimateVolts =
+						speakerDcEstimateVolts * SPEAKER_DC_BLOCK_ALPHA +
+						spkV * (1 - SPEAKER_DC_BLOCK_ALPHA);
+					const acV = spkV - speakerDcEstimateVolts;
+					pendingSpeakerSamples.push(Math.tanh(acV / SPEAKER_AUDIO_SCALE_VOLTS));
+					audioNextSampleTime += audioPeriod;
+				}
+				audioPrevSpkV = spkVNew;
 			}
-			transientState = result.state;
+
+			simTimeAdvanced += stepDt;
+			substeps++;
+
+			if (result.recommendedDt !== undefined) {
+				dt = Math.max(DT_MIN, Math.min(DT_MAX, result.recommendedDt));
+			}
 		}
+
+		if (speakerAudioEnabled && audioSampleRate) {
+			audioSimTime += simTimeAdvanced;
+		}
+
+		if (!lastResult) return;
+		transientResult = lastResult;
+		transientState = lastResult.state;
+		adaptiveDt = dt;
+		updateSpeakerSampleFromNodeVoltages(lastResult.nodeVoltages, false);
+	}
+
+	function toggleTransientRun() {
+		if (transientRunning) {
+			stopTransientRun();
+			return;
+		}
+		transientState = initializeTransientState(netlist, dc.ok ? dc.nodeVoltages : undefined);
+		transientResult = null;
+		speakerDcEstimateVolts = 0;
+		adaptiveDt = DT_INIT;
+		applyStartupKickToState();
+		updateSpeakerUpsampleFactor();
+		transientRunning = true;
+		lastTickWallTime = performance.now();
+
+		runTimer = setInterval(() => {
+			if (!transientRunning) return;
+			if (speakerAudioEnabled && audioSampleRate) {
+				if (workletBufferFill >= SPEAKER_BUFFER_FULL_THRESHOLD) {
+					// Buffer full — skip this tick, but DON'T let wall-time
+					// accumulate during the skip (would cause a runaway burst
+					// of catch-up sim-time once buffer drains).
+					lastTickWallTime = performance.now();
+					return;
+				}
+			}
+
+			// Sim-time budget = wall-time elapsed since last tick, capped to
+			// MAX_CATCHUP_SIMTIME so we never spend forever catching up after
+			// a long stall (e.g., backgrounded tab).
+			const now = performance.now();
+			const wallElapsed = (now - lastTickWallTime) / 1000;
+			const budget = Math.min(Math.max(wallElapsed, SIM_TIME_PER_TICK), MAX_CATCHUP_SIMTIME);
+			lastTickWallTime = now;
+
+			stepTransient(budget);
+			if (pendingSpeakerSamples.length >= SPEAKER_FLUSH_BATCH) flushSpeakerSamples();
+		}, TRANSIENT_RUN_INTERVAL_MS);
 	}
 
 	function resetTransient() {
 		stopTransientRun();
-		transientState = initializeTransientState(netlist);
+		transientState = initializeTransientState(netlist, dc.ok ? dc.nodeVoltages : undefined);
 		transientResult = null;
 		speakerDcEstimateVolts = 0;
+		adaptiveDt = DT_INIT;
 	}
 
 	function stopTransientRun() {
@@ -513,8 +658,7 @@
 	function applyStartupKickToState() {
 		const nextCapacitorVoltages: Record<string, number> = {};
 		for (const [id, value] of Object.entries(transientState.capacitorVoltages)) {
-			const jitter = (Math.random() * 2 - 1) * STARTUP_KICK_AMPLITUDE_VOLTS;
-			nextCapacitorVoltages[id] = value + jitter;
+			nextCapacitorVoltages[id] = value + (Math.random() * 2 - 1) * STARTUP_KICK_AMPLITUDE_VOLTS;
 		}
 		transientState = {
 			...transientState,
@@ -522,41 +666,31 @@
 		};
 	}
 
-	function toggleTransientRun() {
-		if (transientRunning) {
-			stopTransientRun();
-			return;
-		}
-		// Always apply startup kick so oscillator circuits self-start.
-		applyStartupKickToState();
-		updateSpeakerUpsampleFactor();
-		transientRunning = true;
-
-		const MAX_STEPS_PER_TICK = 512;
-
-		runTimer = setInterval(() => {
-			if (!transientRunning) return;
-
-			if (audioSampleRate && speakerAudioEnabled) {
-				if (workletBufferFill >= SPEAKER_BUFFER_FULL_THRESHOLD) return;
-			}
-
-			const stepsPerTick = Math.min(
-				MAX_STEPS_PER_TICK,
-				Math.max(1, Math.round((TRANSIENT_RUN_INTERVAL_MS / 1000) / TRANSIENT_DT))
-			);
-
-			for (let i = 0; i < stepsPerTick; i += 1) {
-				stepTransient();
-				if (!transientRunning) break;
-			}
-			flushSpeakerSamples();
-		}, TRANSIENT_RUN_INTERVAL_MS);
-	}
 </script>
 
 <section class="board-shell">
 	<div class="toolbar">
+		<button
+			class="run-btn"
+			class:running={transientRunning}
+			onclick={() => {
+				if (!speakerAudioEnabled && !transientRunning) {
+					speakerAudioEnabled = true;
+					void startSpeakerAudio();
+				}
+				toggleTransientRun();
+			}}
+			disabled={netlist.elements.length === 0 || netlist.groundNodeId === null}
+		>
+			{transientRunning ? 'Stop' : 'Run'}
+		</button>
+		<button class="clear-btn" onclick={saveWires} disabled={wiresStore.wires.length === 0}>
+			Save wires
+		</button>
+		<label class="load-btn">
+			Load wires
+			<input type="file" accept=".txt,text/plain" onchange={loadWires} hidden />
+		</label>
 		<button class="clear-btn" onclick={() => wiresStore.clearAll()} disabled={wiresStore.wires.length === 0}>
 			Clear all wires
 		</button>
@@ -667,7 +801,41 @@
 		flex-wrap: wrap;
 	}
 
-	.clear-btn {
+	.run-btn {
+		padding: 0.3rem 1rem;
+		font-size: 0.85rem;
+		font-weight: 600;
+		border: 1px solid #43a047;
+		border-radius: 4px;
+		background: #1a3a1a;
+		color: #81c784;
+		cursor: pointer;
+		min-width: 4rem;
+	}
+
+	.run-btn:hover:not(:disabled) {
+		background: #2e5c2e;
+		color: #fff;
+	}
+
+	.run-btn.running {
+		border-color: #c62828;
+		background: #3a1a1a;
+		color: #ef9a9a;
+	}
+
+	.run-btn.running:hover:not(:disabled) {
+		background: #5c2e2e;
+		color: #fff;
+	}
+
+	.run-btn:disabled {
+		opacity: 0.35;
+		cursor: default;
+	}
+
+	.clear-btn,
+	.load-btn {
 		padding: 0.3rem 0.75rem;
 		font-size: 0.85rem;
 		border: 1px solid #555;
@@ -677,9 +845,10 @@
 		cursor: pointer;
 	}
 
-	.clear-btn:hover:not(:disabled) {
-		background: #3c0000;
-		border-color: #e53935;
+	.clear-btn:hover:not(:disabled),
+	.load-btn:hover {
+		background: #1a3a1a;
+		border-color: #43a047;
 		color: #fff;
 	}
 

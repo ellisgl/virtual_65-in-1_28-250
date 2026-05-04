@@ -39,8 +39,9 @@ export function solveDcNetlist(netlist: SimulationNetlist): DcSolution {
 	}
 
 	// Inductors are short circuits at DC; capacitors are open circuits.
+	// Coupling elements have no DC behaviour (only mutual inductance term).
 	const dcElements = netlist.elements.filter(
-		(element) => element.type !== 'capacitor' && element.type !== 'inductor'
+		(element) => element.type !== 'capacitor' && element.type !== 'inductor' && element.type !== 'coupling'
 	);
 	if (dcElements.length === 0) {
 		return {
@@ -237,17 +238,18 @@ export function solveDcNetlist(netlist: SimulationNetlist): DcSolution {
 	const size = n + m + 2 * t;
 	const gmin = 1e-9;
 
-	const matrix = Array.from({ length: size }, () => new Array(size).fill(0));
-	const rhs = new Array(size).fill(0);
+	const matrix  = new Float64Array(size * size);
+	const rhs     = new Float64Array(size);
+	const scratch = new Float64Array(size * size + size);
 
 	const stampConductance = (a: number, b: number, g: number) => {
 		const ia = nodeIndex.get(a);
 		const ib = nodeIndex.get(b);
-		if (ia !== undefined) matrix[ia][ia] += g;
-		if (ib !== undefined) matrix[ib][ib] += g;
+		if (ia !== undefined) matrix[ia * size + ia] += g;
+		if (ib !== undefined) matrix[ib * size + ib] += g;
 		if (ia !== undefined && ib !== undefined) {
-			matrix[ia][ib] -= g;
-			matrix[ib][ia] -= g;
+			matrix[ia * size + ib] -= g;
+			matrix[ib * size + ia] -= g;
 		}
 	};
 
@@ -261,30 +263,47 @@ export function solveDcNetlist(netlist: SimulationNetlist): DcSolution {
 	) => {
 		const ipIdx = n + m + 2 * index;
 		const isIdx = ipIdx + 1;
-
 		const pA = nodeIndex.get(primaryA);
 		const pB = nodeIndex.get(primaryB);
 		const sA = nodeIndex.get(secondaryA);
 		const sB = nodeIndex.get(secondaryB);
-
-		if (pA !== undefined) matrix[pA][ipIdx] += 1;
-		if (pB !== undefined) matrix[pB][ipIdx] -= 1;
-		if (sA !== undefined) matrix[sA][isIdx] += 1;
-		if (sB !== undefined) matrix[sB][isIdx] -= 1;
-
-		if (pA !== undefined) matrix[ipIdx][pA] += 1;
-		if (pB !== undefined) matrix[ipIdx][pB] -= 1;
-		if (sA !== undefined) matrix[ipIdx][sA] -= turnsRatio;
-		if (sB !== undefined) matrix[ipIdx][sB] += turnsRatio;
-
-		matrix[isIdx][ipIdx] += 1;
-		matrix[isIdx][isIdx] += 1 / turnsRatio;
+		if (pA !== undefined) matrix[pA * size + ipIdx] += 1;
+		if (pB !== undefined) matrix[pB * size + ipIdx] -= 1;
+		if (sA !== undefined) matrix[sA * size + isIdx] += 1;
+		if (sB !== undefined) matrix[sB * size + isIdx] -= 1;
+		if (pA !== undefined) matrix[ipIdx * size + pA] += 1;
+		if (pB !== undefined) matrix[ipIdx * size + pB] -= 1;
+		if (sA !== undefined) matrix[ipIdx * size + sA] -= turnsRatio;
+		if (sB !== undefined) matrix[ipIdx * size + sB] += turnsRatio;
+		matrix[isIdx * size + ipIdx] += 1;
+		matrix[isIdx * size + isIdx] += 1 / turnsRatio;
 	};
 
+	// Build the static base matrix once: gmin, resistors, voltage-source stamps,
+	// and transformer stamps are all constant across Newton iterations.
+	for (const nodeId of nonGroundNodes) {
+		const idx = nodeIndex.get(nodeId)!;
+		matrix[idx * size + idx] += gmin;
+	}
 	for (const element of groundedElements) {
 		if (element.type !== 'resistor') continue;
 		stampConductance(element.nodes[0], element.nodes[1], 1 / element.resistanceOhms);
 	}
+	for (let vIdx = 0; vIdx < voltageSources.length; vIdx++) {
+		const source = voltageSources[vIdx];
+		const row  = n + vIdx;
+		const ip   = nodeIndex.get(source.positiveNode);
+		const ineg = nodeIndex.get(source.negativeNode);
+		if (ip   !== undefined) { matrix[ip   * size + row] += 1; matrix[row * size + ip  ] += 1; }
+		if (ineg !== undefined) { matrix[ineg * size + row] -= 1; matrix[row * size + ineg] -= 1; }
+		rhs[row] = source.voltage;
+	}
+	for (let tIdx = 0; tIdx < transformerElements.length; tIdx++) {
+		const tf = transformerElements[tIdx];
+		stampTransformer(tf.primaryNodeA, tf.primaryNodeB, tf.secondaryNodeA, tf.secondaryNodeB, tf.turnsRatio, tIdx);
+	}
+	const baseMatrix = matrix.slice();
+	const baseRhs    = rhs.slice();
 
 	const transistorElements = groundedElements.filter((element) => element.type === 'transistor');
 	const transistorIterations = transistorElements.length > 0 ? 6 : 1;
@@ -293,73 +312,51 @@ export function solveDcNetlist(netlist: SimulationNetlist): DcSolution {
 	let solutionVector: number[] | null = null;
 
 	for (let iteration = 0; iteration < totalIterations; iteration++) {
-		for (let row = 0; row < size; row++) {
-			matrix[row].fill(0);
-			rhs[row] = 0;
-		}
-
-		for (const nodeId of nonGroundNodes) {
-			const idx = nodeIndex.get(nodeId);
-			if (idx !== undefined) matrix[idx][idx] += gmin;
-		}
-
-		for (const element of groundedElements) {
-			if (element.type !== 'resistor') continue;
-			stampConductance(element.nodes[0], element.nodes[1], 1 / element.resistanceOhms);
-		}
+		matrix.set(baseMatrix);
+		rhs.set(baseRhs);
 
 		for (const transistor of transistorElements) {
 			const stamp = computeTransistorStamp(transistor, estimateVoltages);
+			const isPnp = transistor.polarity === 'pnp';
+			const s = isPnp ? -1 : 1;
+
 			stampConductance(transistor.baseNode, transistor.emitterNode, stamp.gBe);
-			stampConductance(transistor.collectorNode, transistor.emitterNode, stamp.gCe);
+			stampConductance(transistor.baseNode, transistor.collectorNode, stamp.gBc);
 
 			const rowC = nodeIndex.get(transistor.collectorNode);
 			const rowE = nodeIndex.get(transistor.emitterNode);
+			const rowB = nodeIndex.get(transistor.baseNode);
 			const colB = nodeIndex.get(transistor.baseNode);
+			const colC = nodeIndex.get(transistor.collectorNode);
 			const colE = nodeIndex.get(transistor.emitterNode);
 
-			if (rowC !== undefined && colB !== undefined) matrix[rowC][colB] += stamp.gmSigned;
-			if (rowC !== undefined && colE !== undefined) matrix[rowC][colE] -= stamp.gmSigned;
-			if (rowE !== undefined && colB !== undefined) matrix[rowE][colB] -= stamp.gmSigned;
-			if (rowE !== undefined && colE !== undefined) matrix[rowE][colE] += stamp.gmSigned;
+			// gm VCCS
+			if (rowC !== undefined && colB !== undefined) matrix[rowC * size + colB] -= s * stamp.gm;
+			if (rowC !== undefined && colE !== undefined) matrix[rowC * size + colE] += s * stamp.gm;
+			if (rowE !== undefined && colB !== undefined) matrix[rowE * size + colB] += s * stamp.gm;
+			if (rowE !== undefined && colE !== undefined) matrix[rowE * size + colE] -= s * stamp.gm;
+
+			// gmu VCCS (Early + reverse)
+			if (rowC !== undefined && colB !== undefined) matrix[rowC * size + colB] -= s * stamp.gmu;
+			if (rowC !== undefined && colC !== undefined) matrix[rowC * size + colC] += s * stamp.gmu;
+			if (rowE !== undefined && colB !== undefined) matrix[rowE * size + colB] += s * stamp.gmu;
+			if (rowE !== undefined && colC !== undefined) matrix[rowE * size + colC] -= s * stamp.gmu;
+
+			// Companion currents
+			if (rowB !== undefined) rhs[rowB] -= stamp.iEqB;
+			if (rowC !== undefined) rhs[rowC] -= stamp.iEqC;
+			if (rowE !== undefined) rhs[rowE] -= stamp.iEqE;
 		}
 
 		stampRelays();
 
-		voltageSources.forEach((source, idx) => {
-			const row = n + idx;
-			const ip = nodeIndex.get(source.positiveNode);
-			const ineg = nodeIndex.get(source.negativeNode);
-
-			if (ip !== undefined) {
-				matrix[ip][row] += 1;
-				matrix[row][ip] += 1;
-			}
-			if (ineg !== undefined) {
-				matrix[ineg][row] -= 1;
-				matrix[row][ineg] -= 1;
-			}
-			rhs[row] = source.voltage;
-		});
-
-		transformerElements.forEach((transformer, idx) => {
-			stampTransformer(
-				transformer.primaryNodeA,
-				transformer.primaryNodeB,
-				transformer.secondaryNodeA,
-				transformer.secondaryNodeB,
-				transformer.turnsRatio,
-				idx
-			);
-		});
-
-		solutionVector = solveLinearSystem(matrix, rhs);
+		solutionVector = solveLinearSystem(matrix, rhs, size, scratch);
 		if (!solutionVector) break;
 
 		estimateVoltages = { [netlist.groundNodeId]: 0 };
-		nonGroundNodes.forEach((nodeId, idx) => {
-			estimateVoltages[nodeId] = solutionVector?.[idx] ?? 0;
-		});
+		for (let i = 0; i < nonGroundNodes.length; i++) {
+			estimateVoltages[nonGroundNodes[i]] = solutionVector[i];
+		}
 		updateRelayStates(estimateVoltages);
 	}
 	if (!solutionVector) {
@@ -376,14 +373,14 @@ export function solveDcNetlist(netlist: SimulationNetlist): DcSolution {
 	}
 
 	const nodeVoltages: Record<number, number> = { [netlist.groundNodeId]: 0 };
-	nonGroundNodes.forEach((nodeId, idx) => {
-		nodeVoltages[nodeId] = solutionVector[idx];
-	});
+	for (let i = 0; i < nonGroundNodes.length; i++) {
+		nodeVoltages[nonGroundNodes[i]] = solutionVector[i];
+	}
 
 	const sourceCurrents: Record<string, number> = {};
-	voltageSources.forEach((source, idx) => {
-		sourceCurrents[source.componentId] = solutionVector[n + idx];
-	});
+	for (let i = 0; i < voltageSources.length; i++) {
+		sourceCurrents[voltageSources[i].componentId] = solutionVector[n + i];
+	}
 
 	return {
 		ok: true,

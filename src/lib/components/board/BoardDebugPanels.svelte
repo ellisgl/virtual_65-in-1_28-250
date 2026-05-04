@@ -82,7 +82,9 @@
 					<strong>{element.componentId}</strong>: XFMR P:N{element.primaryNodeA}-N{element.primaryNodeB} S:N{element.secondaryNodeA}-N{element.secondaryNodeB} n={element.turnsRatio}
 				{:else if element.type === 'inductor'}
 					<strong>{element.componentId}</strong>: L N{element.nodes[0]}-N{element.nodes[1]} = {element.inductanceHenry * 1000} mH
-				{:else}
+				{:else if element.type === 'coupling'}
+					<strong>{element.componentId}</strong>: K group="{element.couplingGroup}" k={element.k}
+				{:else if element.type === 'voltage-source'}
 					<strong>{element.componentId}</strong>: V N{element.positiveNode}-N{element.negativeNode} = {element.voltage} V
 				{/if}
 			</p>
