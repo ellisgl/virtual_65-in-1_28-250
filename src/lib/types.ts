@@ -99,6 +99,22 @@ export interface SimulationCapacitorElement {
 	initialVoltage: number;
 }
 
+export interface SimulationDiodeElement {
+	type: 'diode';
+	componentId: string;
+	/** Junction anode. If Rs > 0 the component has an internal mid-node allocated by netlist.ts. */
+	anodeNode: number;
+	cathodeNode: number;
+	/** Saturation current (A). */
+	is: number;
+	/** Emission coefficient. */
+	n: number;
+	/** Reverse breakdown voltage (V). Present for Zener diodes only. */
+	bv?: number;
+	/** Knee current at breakdown (A). Default 1 mA. */
+	ibv?: number;
+}
+
 export interface SimulationTransistorElement {
 	type: 'transistor';
 	componentId: string;
@@ -204,6 +220,7 @@ export type SimulationElement =
 	| SimulationResistorElement
 	| SimulationVoltageSourceElement
 	| SimulationCapacitorElement
+	| SimulationDiodeElement
 	| SimulationInductorElement
 	| SimulationTransistorElement
 	| SimulationRelayElement
@@ -252,6 +269,29 @@ export interface DcSolution {
 
 
 /**
+ * Symbolic LU pattern computed once per compiled netlist (analyzePattern in sparse.ts).
+ * Reused for every numeric factorization in the Newton loop.
+ */
+export interface SparseLUPattern {
+    /** Matrix dimension. */
+    n: number;
+    /**
+     * For each pivot k: Int32Array of row indices i > k where L[i,k] can be non-zero.
+     * Includes fill-in discovered during symbolic analysis.
+     */
+    lCols: Int32Array[];
+    /**
+     * For each pivot k: Int32Array of column indices j > k where U[k,j] can be non-zero.
+     */
+    uRows: Int32Array[];
+    /**
+     * For each pivot k: flat [i₀,j₀, i₁,j₁, …] pairs updated by A[i,j] -= L[i,k]·U[k,j].
+     * Only positions in the fill pattern are included.
+     */
+    rankOneUpdates: Int32Array[];
+}
+
+/**
  * Pre-computed, netlist-static data. Build once with compileNetlist(),
  * reuse across every stepTransientNetlist() call to avoid per-step allocation.
  */
@@ -262,6 +302,14 @@ export interface CompiledNetlist {
 	transformerElements: SimulationTransformerElement[];
 	inductorElements: SimulationInductorElement[];
 	transistorElements: SimulationTransistorElement[];
+	/** Diode elements (Shockley model + optional Zener breakdown). Stamped per Newton iteration. */
+	diodeElements: SimulationDiodeElement[];
+	/**
+	 * Symbolic LU pattern covering every position that any stamp (static or dynamic)
+	 * can write to. Computed once in compileNetlist(); the numeric factorization uses
+	 * this structure on every Newton step without rediscovering fill-in.
+	 */
+	sparsePattern: SparseLUPattern;
 	nodeIndex: Map<number, number>;
 	n: number;  // non-ground node count
 	m: number;  // voltage source count
@@ -271,6 +319,10 @@ export interface CompiledNetlist {
 	matrix: Float64Array;  // flat row-major, size×size
 	rhs: Float64Array;     // size
 	scratch: Float64Array; // size*size + size — for the linear solver copy
+	/** Pre-allocated baseMatrix — sized once at compile, zeroed each step. */
+	baseMatrix: Float64Array;  // size×size
+	/** Pre-allocated baseRhs — sized once at compile, zeroed each step. */
+	baseRhs: Float64Array;     // size
 	/** Precomputed static stamp entries for resistors/fixed-conductances.
 	 *  Packed as triples: [row0, col0, val0, row1, col1, val1, ...]
 	 *  Applied every Newton iteration with a tight loop — no Map lookups. */
@@ -288,6 +340,17 @@ export interface CompiledNetlist {
 	 *  M_signed = k * sqrt(L_i*L_j) * polarity_i * polarity_j.
 	 *  Each unordered pair appears twice so the matrix is stamped symmetrically. */
 	inductorCouplingPairs: Float64Array;
+	/**
+	 * Compact (nodeIndex) indices for each transistor's base, collector, emitter.
+	 * Layout: [bi, ci, ei,  bi, ci, ei, …]  (-1 = grounded, voltage treated as 0).
+	 * Eliminates nodeIndex.get() calls inside the Newton loop.
+	 */
+	transistorNodeIndices: Int32Array;
+	/**
+	 * Compact (nodeIndex) indices for each diode's anode and cathode.
+	 * Layout: [ai, ki,  ai, ki, …]  (-1 = grounded).
+	 */
+	diodeNodeIndices: Int32Array;
 }
 
 export interface TransientConfig {
@@ -297,24 +360,57 @@ export interface TransientConfig {
 }
 
 export interface TransientState {
-	time: number;
-	capacitorVoltages: Record<string, number>;
-	nodeVoltages: Record<number, number>;
+	/**
+	 * Node voltages in compact order (index i = position of node in nonGroundNodes).
+	 * Ground is not stored; its voltage is always 0.
+	 */
+	nodeVolts:     Float64Array;
+	/** Previous-step node voltages — kept for potential LTE extension; not in hot path. */
+	prevNodeVolts: Float64Array;
+
+	/** Capacitor element voltages indexed by position in CompiledNetlist.capElements. */
+	capVolts:     Float64Array;
+	/** Previous-step capacitor voltages for GEAR-2 companion model. */
+	prevCapVolts: Float64Array;
+
+	/**
+	 * Transistor junction capacitor voltages.
+	 * Layout: [Q0_Vbe, Q0_Vbc, Q1_Vbe, Q1_Vbc, …]  (2 entries per transistor).
+	 * Only backward-Euler companions are used for junction caps, so no GEAR-2 history.
+	 */
+	tjCapVolts: Float64Array;
+	/**
+	 * Back-buffer for tjCapVolts — used as the write target each step so we can
+	 * ping-pong refs instead of allocating a fresh array per step.
+	 */
+	tjCapVoltsBack: Float64Array;
+
+	/** Inductor branch currents indexed by position in inductorElements. */
+	inductorCurrents:     Float64Array;
+	/** Previous-step inductor currents for GEAR-2 companion model. */
+	prevInductorCurrents: Float64Array;
+
+	/** Relay states — rarely accessed; stays as Record to avoid added complexity. */
 	relayStates: Record<string, boolean>;
-	/** Previous-step capacitor voltages, needed for GEAR-2 companion model. */
-	prevCapacitorVoltages?: Record<string, number>;
-	/** Previous-step inductor currents (stored in capacitorVoltages map under ':i' key). */
-	prevInductorCurrents?: Record<string, number>;
-	/** Previous-step node voltages for GEAR-2. */
-	prevNodeVoltages?: Record<number, number>;
-	/** Whether GEAR-2 history is ready (requires at least one completed step). */
-	gear2Ready?: boolean;
+	/** True once the first accepted step has completed; enables GEAR-2 on step 2+. */
+	gear2Ready:   boolean;
+	/**
+	 * Timestep used in the previous completed step.
+	 * Stored so the linear predictor can scale correctly when dt changes between steps.
+	 * 0 on the very first step (disables the predictor).
+	 */
+	prevDt:       number;
+	/**
+	 * Exponentially-weighted moving average of the Newton iteration count.
+	 * α = 0.3, so it tracks recent behaviour without overreacting to single spikes.
+	 * Used to set an adaptive ceiling on the next step's iteration budget.
+	 */
+	avgIterCount: number;
 }
 
 export interface TransientResult {
 	ok: boolean;
 	state: TransientState;
-	nodeVoltages: Record<number, number>;
 	sourceCurrents: Record<string, number>;
 	issue?: DcSolveIssue;
 	warnings: DcSolveIssue[];

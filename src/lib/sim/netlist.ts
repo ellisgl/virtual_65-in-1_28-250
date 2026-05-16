@@ -119,10 +119,11 @@ export function buildSimulationNetlist(
 				continue;
 			}
 
-			// Only include battery if its positive terminal is wired into the circuit.
-			// The negative terminal is often ground and always "connected", so checking
-			// only the positive side tells us whether this battery is actually in use.
-			if (!connectedNodeSet.has(positiveNode)) {
+			// Emit battery if either terminal is wired into the circuit.
+			// The positive check alone can silently drop a battery that is
+			// wired with only its negative terminal connected (e.g. straight
+			// to ground without routing the positive side yet).
+			if (!connectedNodeSet.has(positiveNode) && !connectedNodeSet.has(negativeNode)) {
 				continue;
 			}
 
@@ -473,14 +474,17 @@ export function buildSimulationNetlist(
 			// base further negative (PNP), latching Q2 ON harder. This is the
 			// regenerative feedback that makes the blocking oscillator slow.
 			//
-			// Coupling coefficient. Reads from metadata (datasheet says k=0.995),
-			// but in practice the simulator's branch-current MNA needs a lower value
-			// to avoid violent overshoot. k=0.1 is the empirically-tuned value
-			// that gives stable simulation; the reflected secondary load and
-			// the BJT junction caps provide additional damping.
+			// Coupling coefficient — empirical value, NOT the datasheet.
+			// The LT700 datasheet specifies k ≈ 0.995, but the branch-current
+			// MNA in this simulator overshoots violently at that value: the
+			// reflected secondary load + BJT junction caps can't damp out
+			// the rapid flux transfer from primary to secondary.
+			// k = 0.1 is the empirically-tuned value that gives stable
+			// blocking-oscillator behaviour in the metronome / siren circuits.
+			// (Datasheet value is preserved in components.ts as
+			// `couplingDatasheet` for reference only.)
 			const couplingGroup = `${component.id}:core`;
-			const kFromMeta = asNumber(component.metadata?.coupling);
-			const k = kFromMeta !== null && kFromMeta > 0 && kFromMeta < 1 ? Math.min(kFromMeta, 0.1) : 0.1;
+			const k = 0.1;
 			const lsHeff = lsH; // secondary inductance from metadata (~4mH)
 
 			const midP1 = allocInternalNode();
@@ -533,6 +537,137 @@ export function buildSimulationNetlist(
 				couplingGroup, k,
 			});
 
+			continue;
+		}
+
+		if (component.kind === 'diode' || component.kind === 'zener-diode') {
+			const params = component.model?.params ?? {};
+			const is  = Math.max(asNumber(params.is)  ?? 1e-14, 1e-20);
+			const n   = Math.max(asNumber(params.n)   ?? 1,     0.5);
+			const rs  = Math.max(asNumber(params.rs)  ?? 0,     0);
+			// bv only meaningful for zener-diode; regular diode has no breakdown model.
+			const bv  = component.kind === 'zener-diode' ? (asNumber(params.bv) ?? undefined) : undefined;
+			const ibv = asNumber(params.ibv) ?? 1e-3;
+
+			if (binding.nodeIds.length !== 2) {
+				unsupported.push({
+					componentId: component.id,
+					kind: component.kind,
+					reason: 'Diode requires exactly two terminals'
+				});
+				continue;
+			}
+
+			// Convention: first terminal = anode, second = cathode.
+			let anodeNode    = binding.nodeIds[0];
+			const cathodeNode = binding.nodeIds[1];
+
+			// Series resistance — allocate an internal mid-node so the junction
+			// itself is between midNode and cathode, with Rs between anode and midNode.
+			if (rs > 0) {
+				const midNode = allocInternalNode();
+				elements.push({
+					type: 'resistor',
+					componentId: `${component.id}:Rs`,
+					nodes: [anodeNode, midNode],
+					resistanceOhms: rs
+				});
+				anodeNode = midNode;
+			}
+
+			elements.push({
+				type: 'diode',
+				componentId: component.id,
+				anodeNode,
+				cathodeNode,
+				is,
+				n,
+				bv,
+				ibv: bv !== undefined ? ibv : undefined
+			});
+			continue;
+		}
+
+		if (component.kind === 'scr') {
+			// Expand the C103Y subcircuit into its two-BJT equivalent:
+			//   .SUBCKT C103Y 1(anode) 2(gate) 3(cathode)
+			//     QP 4(internal) 1 2 QPNP   ; col=internal, base=anode, emit=gate
+			//     QN 2 4 3 QNPN             ; col=gate, base=internal, emit=cathode
+			//     RGK 2 3 1k
+			//   .ENDS
+			const gate    = asNumber(component.metadata?.gate);
+			const anode   = asNumber(component.metadata?.anode);
+			const cathode = asNumber(component.metadata?.cathode);
+
+			if (gate === null || anode === null || cathode === null) {
+				unsupported.push({
+					componentId: component.id,
+					kind: component.kind,
+					reason: 'SCR requires gate/anode/cathode metadata'
+				});
+				continue;
+			}
+
+			const gateNode    = topology.terminalToNode[gate];
+			const anodeNode   = topology.terminalToNode[anode];
+			const cathodeNode = topology.terminalToNode[cathode];
+
+			if (
+				typeof gateNode    !== 'number' ||
+				typeof anodeNode   !== 'number' ||
+				typeof cathodeNode !== 'number'
+			) {
+				unsupported.push({
+					componentId: component.id,
+					kind: component.kind,
+					reason: 'SCR terminals are missing topology node bindings'
+				});
+				continue;
+			}
+
+			const params         = component.model?.params ?? {};
+			const gateResistance = asNumber(params.gateResistance) ?? 1000;
+			const internalNode   = allocInternalNode();
+
+			// QP (PNP): collector=internal, base=anode, emitter=gate
+			elements.push({
+				type: 'transistor',
+				componentId: `${component.id}:QP`,
+				polarity: 'pnp',
+				baseNode:      anodeNode,
+				collectorNode: internalNode,
+				emitterNode:   gateNode,
+				beta:       asNumber(params.qpnpBf)  ?? 5,
+				is:         asNumber(params.qpnpIs)  ?? 1e-14,
+				nf: 1, nr: 1,
+				vaf:        asNumber(params.qpnpVaf) ?? 30,
+				cjeFarads:  asNumber(params.qpnpCje) ?? 20e-12,
+				cjcFarads:  0
+			});
+
+			// QN (NPN): collector=gate, base=internal, emitter=cathode
+			elements.push({
+				type: 'transistor',
+				componentId: `${component.id}:QN`,
+				polarity: 'npn',
+				baseNode:      internalNode,
+				collectorNode: gateNode,
+				emitterNode:   cathodeNode,
+				beta:       asNumber(params.qnpnBf)  ?? 100,
+				is:         asNumber(params.qnpnIs)  ?? 1e-14,
+				nf: 1, nr: 1,
+				vaf:        asNumber(params.qnpnVaf) ?? 30,
+				cjeFarads:  asNumber(params.qnpnCje) ?? 20e-12,
+				cjcFarads:  0
+			});
+
+			// RGK: gate to cathode resistor stabilises the loop
+			elements.push({
+				type: 'resistor',
+				componentId: `${component.id}:RGK`,
+				nodes: [gateNode, cathodeNode],
+				resistanceOhms: gateResistance
+			});
 			continue;
 		}
 

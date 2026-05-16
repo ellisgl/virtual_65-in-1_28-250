@@ -309,7 +309,9 @@ const magneticParts: KitComponent[] = [
 			rp1Ohm: 45,
 			rp2Ohm: 45,
 			rsOhm: 0.4,
-			coupling: 0.995,
+			// Datasheet coupling coefficient — kept here for reference only.
+			// The simulator uses an empirically-tuned k (see netlist.ts).
+			couplingDatasheet: 0.995,
 			// Compatibility aliases for existing transformer consumers.
 			ratioParameter: 0.05,
 			turnsRatioApprox: 20

@@ -130,13 +130,10 @@
 <details class="topology-panel">
 	<summary>Capacitor state debug</summary>
 	<div class="topology-grid">
-		{#if Object.keys(transientState.capacitorVoltages).length === 0}
-			<p class="node-line">No capacitor state tracked yet.</p>
-		{:else}
-			{#each Object.entries(transientState.capacitorVoltages).sort(([a], [b]) => a.localeCompare(b)) as [id, voltage]}
-				<p class="node-line">{id}: {voltage.toFixed(6)} V</p>
-			{/each}
-		{/if}
+		<p class="node-line">
+			Capacitor voltages are stored as typed arrays — see capVolts / tjCapVolts / inductorCurrents
+			in TransientState (no longer a string-keyed Record).
+		</p>
 		{#if hasVariableCapacitor}
 			<p class="node-line">VC1 setting: {formatCapacitance(variableCapacitance)}</p>
 		{/if}

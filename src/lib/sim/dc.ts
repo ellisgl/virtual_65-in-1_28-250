@@ -1,7 +1,10 @@
 import { solveLinearSystem } from '$lib/sim/linear';
 import { computeTransistorStamp } from '$lib/sim/transistor';
+import { computeDiodeStamp } from '$lib/sim/diode';
+import { analyzePattern, numericFactor, sparseSolveInPlace } from '$lib/sim/sparse';
 import type {
 	DcSolution,
+	SimulationDiodeElement,
 	SimulationNetlist,
 	SimulationTransformerElement,
 	SimulationVoltageSourceElement
@@ -41,7 +44,7 @@ export function solveDcNetlist(netlist: SimulationNetlist): DcSolution {
 	// Inductors are short circuits at DC; capacitors are open circuits.
 	// Coupling elements have no DC behaviour (only mutual inductance term).
 	const dcElements = netlist.elements.filter(
-		(element) => element.type !== 'capacitor' && element.type !== 'inductor' && element.type !== 'coupling'
+		(element) => element.type !== 'capacitor' && element.type !== 'coupling'
 	);
 	if (dcElements.length === 0) {
 		return {
@@ -73,12 +76,18 @@ export function solveDcNetlist(netlist: SimulationNetlist): DcSolution {
 			usedNodes.add(element.primaryNodeB);
 			usedNodes.add(element.secondaryNodeA);
 			usedNodes.add(element.secondaryNodeB);
+		} else if (element.type === 'inductor') {
+			usedNodes.add(element.nodes[0]);
+			usedNodes.add(element.nodes[1]);
 		} else if (element.type === 'relay') {
 			usedNodes.add(element.coilPositiveNode);
 			usedNodes.add(element.coilNegativeNode);
 			usedNodes.add(element.commonNode);
 			usedNodes.add(element.normallyClosedNode);
 			usedNodes.add(element.normallyOpenNode);
+		} else if (element.type === 'diode') {
+			usedNodes.add(element.anodeNode);
+			usedNodes.add(element.cathodeNode);
 		}
 	}
 	usedNodes.add(netlist.groundNodeId);
@@ -102,6 +111,9 @@ export function solveDcNetlist(netlist: SimulationNetlist): DcSolution {
 			link(element.emitterNode, element.baseNode);
 			link(element.collectorNode, element.emitterNode);
 			link(element.emitterNode, element.collectorNode);
+		} else if (element.type === 'inductor') {
+			link(element.nodes[0], element.nodes[1]);
+			link(element.nodes[1], element.nodes[0]);
 		} else if (element.type === 'transformer') {
 			link(element.primaryNodeA, element.primaryNodeB);
 			link(element.primaryNodeB, element.primaryNodeA);
@@ -111,6 +123,9 @@ export function solveDcNetlist(netlist: SimulationNetlist): DcSolution {
 			link(element.secondaryNodeA, element.primaryNodeA);
 			link(element.primaryNodeB, element.secondaryNodeB);
 			link(element.secondaryNodeB, element.primaryNodeB);
+		} else if (element.type === 'diode') {
+			link(element.anodeNode, element.cathodeNode);
+			link(element.cathodeNode, element.anodeNode);
 		} else {
 			link(element.coilPositiveNode, element.coilNegativeNode);
 			link(element.coilNegativeNode, element.coilPositiveNode);
@@ -133,7 +148,7 @@ export function solveDcNetlist(netlist: SimulationNetlist): DcSolution {
 	}
 
 	const groundedElements = dcElements.filter((element) => {
-		if (element.type === 'resistor') {
+		if (element.type === 'resistor' || element.type === 'inductor') {
 			return groundedNodes.has(element.nodes[0]) && groundedNodes.has(element.nodes[1]);
 		}
 		if (element.type === 'voltage-source') {
@@ -155,6 +170,9 @@ export function solveDcNetlist(netlist: SimulationNetlist): DcSolution {
 				element.turnsRatio > 0
 			);
 		}
+		if (element.type === 'diode') {
+			return groundedNodes.has(element.anodeNode) && groundedNodes.has(element.cathodeNode);
+		}
 		return (
 			groundedNodes.has(element.coilPositiveNode) &&
 			groundedNodes.has(element.coilNegativeNode) &&
@@ -172,10 +190,12 @@ export function solveDcNetlist(netlist: SimulationNetlist): DcSolution {
 	let relayStates: Record<string, boolean> = {};
 	for (const relay of relayElements) relayStates[relay.componentId] = false;
 
-	const updateRelayStates = (voltages: Record<number, number>) => {
+	const updateRelayStates = (estBuf: Float64Array) => {
 		for (const relay of relayElements) {
-			const vp = voltages[relay.coilPositiveNode] ?? 0;
-			const vn = voltages[relay.coilNegativeNode] ?? 0;
+			const cpIdx = nodeIndex.get(relay.coilPositiveNode);
+			const cnIdx = nodeIndex.get(relay.coilNegativeNode);
+			const vp = cpIdx !== undefined ? estBuf[cpIdx] : 0;
+			const vn = cnIdx !== undefined ? estBuf[cnIdx] : 0;
 			const coilCurrent = Math.abs((vp - vn) / relay.coilResistanceOhms);
 			const currentlyOn = relayStates[relay.componentId] ?? false;
 			if (currentlyOn) {
@@ -183,18 +203,6 @@ export function solveDcNetlist(netlist: SimulationNetlist): DcSolution {
 			} else {
 				relayStates[relay.componentId] = coilCurrent >= relay.onCurrent;
 			}
-		}
-	};
-
-	const stampRelays = () => {
-		for (const relay of relayElements) {
-			stampConductance(relay.coilPositiveNode, relay.coilNegativeNode, 1 / relay.coilResistanceOhms);
-
-			const isOn = relayStates[relay.componentId] ?? false;
-			const gComNc = 1 / (isOn ? relay.roffOhms : relay.ronOhms);
-			const gComNo = 1 / (isOn ? relay.ronOhms : relay.roffOhms);
-			stampConductance(relay.commonNode, relay.normallyClosedNode, gComNc);
-			stampConductance(relay.commonNode, relay.normallyOpenNode, gComNo);
 		}
 	};
 
@@ -279,6 +287,21 @@ export function solveDcNetlist(netlist: SimulationNetlist): DcSolution {
 		matrix[isIdx * size + isIdx] += 1 / turnsRatio;
 	};
 
+	// Declared after stampConductance so its dependency on it is resolved at
+	// definition time, not runtime — avoids TDZ-style fragility if the call
+	// site ever moves earlier.
+	const stampRelays = () => {
+		for (const relay of relayElements) {
+			stampConductance(relay.coilPositiveNode, relay.coilNegativeNode, 1 / relay.coilResistanceOhms);
+
+			const isOn = relayStates[relay.componentId] ?? false;
+			const gComNc = 1 / (isOn ? relay.roffOhms : relay.ronOhms);
+			const gComNo = 1 / (isOn ? relay.ronOhms : relay.roffOhms);
+			stampConductance(relay.commonNode, relay.normallyClosedNode, gComNc);
+			stampConductance(relay.commonNode, relay.normallyOpenNode, gComNo);
+		}
+	};
+
 	// Build the static base matrix once: gmin, resistors, voltage-source stamps,
 	// and transformer stamps are all constant across Newton iterations.
 	for (const nodeId of nonGroundNodes) {
@@ -286,6 +309,12 @@ export function solveDcNetlist(netlist: SimulationNetlist): DcSolution {
 		matrix[idx * size + idx] += gmin;
 	}
 	for (const element of groundedElements) {
+		if (element.type === 'inductor') {
+			// Inductor = short circuit at DC (V = L*dI/dt = 0 in steady state).
+			// Stamp as near-zero resistance so it provides a wire between its nodes.
+			stampConductance(element.nodes[0], element.nodes[1], 1e6);
+			continue;
+		}
 		if (element.type !== 'resistor') continue;
 		stampConductance(element.nodes[0], element.nodes[1], 1 / element.resistanceOhms);
 	}
@@ -306,43 +335,113 @@ export function solveDcNetlist(netlist: SimulationNetlist): DcSolution {
 	const baseRhs    = rhs.slice();
 
 	const transistorElements = groundedElements.filter((element) => element.type === 'transistor');
-	const transistorIterations = transistorElements.length > 0 ? 6 : 1;
-	const totalIterations = Math.max(transistorIterations, relayIterations);
-	let estimateVoltages: Record<number, number> = { [netlist.groundNodeId]: 0 };
-	let solutionVector: number[] | null = null;
+	const diodeElements = groundedElements.filter(
+		(element): element is SimulationDiodeElement => element.type === 'diode'
+	);
+	const transistorIterations = transistorElements.length > 0 ? 15 : 1;
+	const diodeIterations      = diodeElements.length      > 0 ? 10 : 1;
+	const totalIterations = Math.max(transistorIterations, relayIterations, diodeIterations);
+
+	// ── Symbolic LU — built once per solveDcNetlist call ────────────────────
+	// Scan the already-stamped baseMatrix for all non-zero positions, then
+	// overlay the transistor and diode stamp positions (which are zero at the
+	// cold start but can be non-zero at any operating point).
+	const dcPatMark = new Uint8Array(size * size);
+	for (let idx = 0; idx < baseMatrix.length; idx++) {
+		if (baseMatrix[idx] !== 0) dcPatMark[idx] = 1;
+	}
+	for (const t of transistorElements) {
+		for (const na of [t.baseNode, t.collectorNode, t.emitterNode]) {
+			const ri = nodeIndex.get(na);
+			if (ri === undefined) continue;
+			for (const nb of [t.baseNode, t.collectorNode, t.emitterNode]) {
+				const rj = nodeIndex.get(nb);
+				if (rj === undefined) continue;
+				dcPatMark[ri * size + rj] = 1;
+			}
+		}
+	}
+	for (const d of diodeElements) {
+		const ia = nodeIndex.get(d.anodeNode);
+		const ic = nodeIndex.get(d.cathodeNode);
+		if (ia !== undefined) dcPatMark[ia * size + ia] = 1;
+		if (ic !== undefined) dcPatMark[ic * size + ic] = 1;
+		if (ia !== undefined && ic !== undefined) {
+			dcPatMark[ia * size + ic] = 1;
+			dcPatMark[ic * size + ia] = 1;
+		}
+	}
+	const dcSparsePattern = analyzePattern(dcPatMark, size);
+	// ─────────────────────────────────────────────────────────────────────────
+
+	// ── Per-element compact indices for stamp functions ──────────────────────
+	// These mirror the transistorNodeIndices/diodeNodeIndices in CompiledNetlist
+	// but are computed locally since DC doesn't have a CompiledNetlist cache.
+	const dcTni = new Int32Array(transistorElements.length * 3);
+	transistorElements.forEach((t, i) => {
+		dcTni[i * 3]     = nodeIndex.get(t.baseNode)      ?? -1;
+		dcTni[i * 3 + 1] = nodeIndex.get(t.collectorNode) ?? -1;
+		dcTni[i * 3 + 2] = nodeIndex.get(t.emitterNode)   ?? -1;
+	});
+	const dcDni = new Int32Array(diodeElements.length * 2);
+	diodeElements.forEach((d, i) => {
+		dcDni[i * 2]     = nodeIndex.get(d.anodeNode)   ?? -1;
+		dcDni[i * 2 + 1] = nodeIndex.get(d.cathodeNode) ?? -1;
+	});
+
+	// Compact estimate buffer (indexed by nodeIndex, same space as matrix rows).
+	const estBuf = new Float64Array(size);
+
+	// Heuristic warm-start: set transistor nodes near their expected active-region
+	// voltages so the first Newton iteration doesn't get exp() blowup from a cold
+	// all-zeros start.  VCC is the largest voltage-source magnitude in the netlist.
+	const maxVcc = voltageSources.length > 0
+		? Math.max(...voltageSources.map((s) => Math.abs(s.voltage)))
+		: 5;
+	for (let i = 0; i < transistorElements.length; i++) {
+		const t = transistorElements[i];
+		const bi = dcTni[i * 3], ci = dcTni[i * 3 + 1], ei = dcTni[i * 3 + 2];
+		const isPnp = t.polarity === 'pnp';
+		if (isPnp) {
+			if (ei >= 0) estBuf[ei] = maxVcc;
+			if (bi >= 0) estBuf[bi] = maxVcc * 0.9;
+			if (ci >= 0) estBuf[ci] = maxVcc * 0.5;
+		} else {
+			if (ei >= 0) estBuf[ei] = 0;
+			if (bi >= 0) estBuf[bi] = 0.6;
+			if (ci >= 0) estBuf[ci] = maxVcc * 0.5;
+		}
+	}
+
+	let solutionVector: ArrayLike<number> | null = null;
 
 	for (let iteration = 0; iteration < totalIterations; iteration++) {
 		matrix.set(baseMatrix);
 		rhs.set(baseRhs);
 
-		for (const transistor of transistorElements) {
-			const stamp = computeTransistorStamp(transistor, estimateVoltages);
-			const isPnp = transistor.polarity === 'pnp';
-			const s = isPnp ? -1 : 1;
+		for (let i = 0; i < transistorElements.length; i++) {
+			const transistor = transistorElements[i];
+			const bi = dcTni[i * 3], ci = dcTni[i * 3 + 1], ei = dcTni[i * 3 + 2];
+			// DC solve: no prevVolts — hard ceiling prevents overflow from cold start.
+			const stamp = computeTransistorStamp(transistor, estBuf, bi, ci, ei);
 
 			stampConductance(transistor.baseNode, transistor.emitterNode, stamp.gBe);
 			stampConductance(transistor.baseNode, transistor.collectorNode, stamp.gBc);
 
-			const rowC = nodeIndex.get(transistor.collectorNode);
-			const rowE = nodeIndex.get(transistor.emitterNode);
-			const rowB = nodeIndex.get(transistor.baseNode);
-			const colB = nodeIndex.get(transistor.baseNode);
-			const colC = nodeIndex.get(transistor.collectorNode);
-			const colE = nodeIndex.get(transistor.emitterNode);
+			const rowC = ci >= 0 ? ci : undefined;
+			const rowE = ei >= 0 ? ei : undefined;
+			const rowB = bi >= 0 ? bi : undefined;
 
-			// gm VCCS
-			if (rowC !== undefined && colB !== undefined) matrix[rowC * size + colB] -= s * stamp.gm;
-			if (rowC !== undefined && colE !== undefined) matrix[rowC * size + colE] += s * stamp.gm;
-			if (rowE !== undefined && colB !== undefined) matrix[rowE * size + colB] += s * stamp.gm;
-			if (rowE !== undefined && colE !== undefined) matrix[rowE * size + colE] -= s * stamp.gm;
+			if (rowC !== undefined && bi >= 0) matrix[rowC * size + bi] += stamp.gm;
+			if (rowC !== undefined && ei >= 0) matrix[rowC * size + ei] -= stamp.gm;
+			if (rowE !== undefined && bi >= 0) matrix[rowE * size + bi] -= stamp.gm;
+			if (rowE !== undefined && ei >= 0) matrix[rowE * size + ei] += stamp.gm;
 
-			// gmu VCCS (Early + reverse)
-			if (rowC !== undefined && colB !== undefined) matrix[rowC * size + colB] -= s * stamp.gmu;
-			if (rowC !== undefined && colC !== undefined) matrix[rowC * size + colC] += s * stamp.gmu;
-			if (rowE !== undefined && colB !== undefined) matrix[rowE * size + colB] += s * stamp.gmu;
-			if (rowE !== undefined && colC !== undefined) matrix[rowE * size + colC] -= s * stamp.gmu;
+			if (rowC !== undefined && bi >= 0) matrix[rowC * size + bi] += stamp.gmu;
+			if (rowC !== undefined && ci >= 0) matrix[rowC * size + ci] -= stamp.gmu;
+			if (rowE !== undefined && bi >= 0) matrix[rowE * size + bi] -= stamp.gmu;
+			if (rowE !== undefined && ci >= 0) matrix[rowE * size + ci] += stamp.gmu;
 
-			// Companion currents
 			if (rowB !== undefined) rhs[rowB] -= stamp.iEqB;
 			if (rowC !== undefined) rhs[rowC] -= stamp.iEqC;
 			if (rowE !== undefined) rhs[rowE] -= stamp.iEqE;
@@ -350,14 +449,27 @@ export function solveDcNetlist(netlist: SimulationNetlist): DcSolution {
 
 		stampRelays();
 
-		solutionVector = solveLinearSystem(matrix, rhs, size, scratch);
+		for (let di = 0; di < diodeElements.length; di++) {
+			const diode = diodeElements[di];
+			const ai = dcDni[di * 2], ki = dcDni[di * 2 + 1];
+			const stamp = computeDiodeStamp(diode, estBuf, ai, ki);
+			stampConductance(diode.anodeNode, diode.cathodeNode, stamp.gd);
+			if (ai >= 0) rhs[ai] -= stamp.ieq;
+			if (ki >= 0) rhs[ki] += stamp.ieq;
+		}
+
+		// Sparse LU — numericFactor works in-place on matrix; matrix is reset
+		// from baseMatrix at the top of each iteration so mutation is safe.
+		if (numericFactor(matrix, size, dcSparsePattern)) {
+			sparseSolveInPlace(matrix, rhs, size, dcSparsePattern);
+			solutionVector = rhs;
+		} else {
+			solutionVector = solveLinearSystem(matrix, rhs, size, scratch);
+		}
 		if (!solutionVector) break;
 
-		estimateVoltages = { [netlist.groundNodeId]: 0 };
-		for (let i = 0; i < nonGroundNodes.length; i++) {
-			estimateVoltages[nonGroundNodes[i]] = solutionVector[i];
-		}
-		updateRelayStates(estimateVoltages);
+		for (let i = 0; i < n; i++) estBuf[i] = solutionVector[i];
+		updateRelayStates(estBuf);
 	}
 	if (!solutionVector) {
 		return {

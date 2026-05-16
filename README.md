@@ -41,7 +41,7 @@ Core simulator data currently lives in these files:
 
 - `src/lib/types.ts` - shared TypeScript types used by component and terminal data
 - `src/lib/data/components.ts` - canonical 65-in-1 part catalog (terminals, values, model metadata)
-- `src/lib/data/terminalPositions.ts` - spring terminal coordinates in board SVG space (`viewBox 0 0 387 267`)
+- `src/lib/data/terminalPositions.ts` - spring terminal coordinates in board SVG space (`viewBox 0 0 437 267`)
 - `src/lib/data/index.ts` - barrel exports for data modules
 
 ### Editing Workflow
@@ -65,7 +65,7 @@ bun run dev
 Use this workflow to place spring terminal coordinates into `src/lib/data/terminalPositions.ts`.
 
 1. Open `graphics/65-in-1_new.svg` in Inkscape.
-2. Confirm document viewBox is `0 0 387 267` (the app uses this coordinate space directly).
+2. Confirm document viewBox is `0 0 437 267` (the app uses this coordinate space directly).
 3. Enable snapping and place a temporary circle marker centered on a spring terminal.
 4. Read the marker center coordinates (`X`, `Y`) from Inkscape's tool controls.
 5. Copy those numbers into `TERMINAL_POSITIONS[terminalId]` as `{ x, y }`.
@@ -162,10 +162,10 @@ A minimal linear DC solver is now available for compiled runtime netlists.
 - Method: Modified nodal analysis + Gaussian elimination
 - Current scope: resistors and battery voltage sources
 
-Run demo:
+Run demo (the runtime demo also exercises the DC solver):
 
 ```bash
-bun run dc:demo
+bun run runtime:demo
 ```
 
 ## Transient Step Layer

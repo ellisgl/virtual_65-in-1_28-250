@@ -1,23 +1,43 @@
 import { KIT_COMPONENTS } from '$lib/data/components';
+import { TERMINAL_POSITIONS } from '$lib/data/terminalPositions';
 import { buildCircuitTopology } from '$lib/sim/topology';
 import type { DragState, Wire } from '$lib/types';
 
-const WIRE_COLORS = [
-	'#e53935',
-	'#1e88e5',
-	'#43a047',
-	'#fdd835',
-	'#ff6f00',
-	'#6a1b9a',
-	'#00838f',
-	'#f4511e'
-];
+// ── Wire colour model ────────────────────────────────────────────────────────
+//
+// Each wire is coloured as the shortest standard wire length that can
+// physically bridge its endpoints, matching the kit's physical wire bins:
+//
+//   White  — 7.5 cm    Red    — 15 cm    Blue   — 25 cm
+//   Yellow — 35 cm     Black  — 38 cm    Green  — 3 m
+//
+// Approximate SVG coordinate scale: 11 units ≈ 1 cm.
+// Adjust SVG_UNITS_PER_CM if the board artwork changes.
 
-let colorIndex = 0;
+const SVG_UNITS_PER_CM = 11;
 
-function nextColor(): string {
-	return WIRE_COLORS[colorIndex++ % WIRE_COLORS.length];
+const WIRE_BINS = [
+	{ maxCm: 7.5,      color: '#ffffff' }, // white  — 7.5 cm
+	{ maxCm: 15,       color: '#e53935' }, // red    — 15 cm
+	{ maxCm: 25,       color: '#1e88e5' }, // blue   — 25 cm
+	{ maxCm: 35,       color: '#fdd835' }, // yellow — 35 cm
+	{ maxCm: 38,       color: '#2d2d2d' }, // black  — 38 cm
+	{ maxCm: Infinity, color: '#43a047' }, // green  — 3 m
+] as const;
+
+function wireColor(fromTerminal: number, toTerminal: number): string {
+	const from = TERMINAL_POSITIONS[fromTerminal];
+	const to   = TERMINAL_POSITIONS[toTerminal];
+	// Unmapped terminals (position −1, −1) default to the shortest wire.
+	if (!from || !to || from.x < 0 || to.x < 0) return WIRE_BINS[0].color;
+	const cm = Math.hypot(to.x - from.x, to.y - from.y) / SVG_UNITS_PER_CM;
+	for (const bin of WIRE_BINS) {
+		if (cm <= bin.maxCm) return bin.color;
+	}
+	return WIRE_BINS[WIRE_BINS.length - 1].color;
 }
+
+// ── Store ────────────────────────────────────────────────────────────────────
 
 function makeStore() {
 	let wires = $state<Wire[]>([]);
@@ -27,7 +47,6 @@ function makeStore() {
 		currentX: 0,
 		currentY: 0
 	});
-	// Cached: recomputes only when wires changes, not on every access.
 	let _topology = $derived(buildCircuitTopology(wires, KIT_COMPONENTS));
 
 	return {
@@ -67,7 +86,7 @@ function makeStore() {
 					id: crypto.randomUUID(),
 					fromTerminal: from,
 					toTerminal,
-					color: nextColor()
+					color: wireColor(from, toTerminal)
 				});
 			}
 			this.cancel();
@@ -89,11 +108,9 @@ function makeStore() {
 		},
 		clearAll() {
 			wires.length = 0;
-			colorIndex = 0;
 		},
 		loadWires(newWires: Array<{ fromTerminal: number; toTerminal: number }>) {
 			wires.length = 0;
-			colorIndex = 0;
 			for (const { fromTerminal, toTerminal } of newWires) {
 				const exists = wires.some(
 					(w) =>
@@ -105,7 +122,7 @@ function makeStore() {
 						id: crypto.randomUUID(),
 						fromTerminal,
 						toTerminal,
-						color: nextColor()
+						color: wireColor(fromTerminal, toTerminal)
 					});
 				}
 			}

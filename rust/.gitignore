@@ -1,0 +1,6 @@
+# Rust build artifacts
+target/
+
+# wasm-pack auxiliary files we don't need (build.sh removes these but
+# leaving the pattern in case CI keeps them around)
+pkg/

@@ -97,7 +97,23 @@ export function buildCircuitTopology(wires: Wire[], components: KitComponent[]):
 		componentId: component.id,
 		componentKind: component.kind,
 		terminals: component.terminals,
-		nodeIds: component.terminals.map((terminal) => terminalToNode[terminal])
+		// terminalToNode is a Record, so indexing returns `number | undefined`
+		// at runtime even though TS infers `number` (noUncheckedIndexedAccess
+		// is off).  The lookup is safe by construction — every component
+		// terminal was added to allTerminals → uf → terminalToNode above —
+		// but make the invariant explicit so a future refactor of the
+		// topology builder can't silently produce undefined nodeIds.
+		nodeIds: component.terminals.map((terminal) => {
+			const nodeId = terminalToNode[terminal];
+			if (nodeId === undefined) {
+				throw new Error(
+					`buildCircuitTopology: component '${component.id}' terminal ${terminal} `
+					+ `is not registered in terminalToNode (invariant broken — `
+					+ `the terminal should have been added to the union-find above)`
+				);
+			}
+			return nodeId;
+		})
 	}));
 
 	const groundTerminal = getGroundTerminal(allTerminals);

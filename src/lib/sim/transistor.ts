@@ -17,16 +17,29 @@ export interface TransistorStamp {
 function clamp(v: number, lo: number, hi: number) { return v < lo ? lo : v > hi ? hi : v; }
 
 /**
- * SPICE-style junction voltage limiting.
- * Prevents exponential blowup during Newton iterations by limiting
- * the voltage step to ±2Vt above the critical voltage.
+ * SPICE-style junction voltage limiting (pnjlim).
+ * Prevents exponential blowup during Newton iterations.
+ *
+ * Standard SPICE algorithm — handles two cases:
+ *   1. vold > 0 and step jumps forward by more than 2·Vt:
+ *      squeeze with vt*log(1 + Δv/vt) so the exponential current grows
+ *      sub-linearly with the step instead of explosively.
+ *   2. vold ≤ 0 jumping to vnew > vcrit:
+ *      replace vnew with vt*log(vnew/vt), pulling huge positive guesses
+ *      back into a tractable range (this is the "reverse-to-forward"
+ *      case the previous version of this function silently allowed).
+ * No limiting in the reverse direction — exp(v/vt) saturates harmlessly
+ * for large negative v.
  */
 function limitV(vnew: number, vold: number, vt: number, is: number): number {
     const vcrit = vt * Math.log(vt / (Math.SQRT2 * is));
-    if (vnew > vcrit) {
-        if (Math.abs(vnew - vold) > 2 * vt) {
-            return vold + (vnew > vold ? 2 * vt : -2 * vt);
+    if (vnew > vcrit && Math.abs(vnew - vold) > 2 * vt) {
+        if (vold > 0) {
+            const arg = 1 + (vnew - vold) / vt;
+            return arg > 0 ? vold + vt * Math.log(arg) : vcrit;
         }
+        // vold ≤ 0, vnew > vcrit: this is the case the old limiter missed.
+        return vt * Math.log(vnew / vt);
     }
     return vnew;
 }
@@ -34,24 +47,24 @@ function limitV(vnew: number, vold: number, vt: number, is: number): number {
 /**
  * Full Gummel-Poon transistor model.
  *
- * Implements the standard SPICE Gummel-Poon equations:
- *   • Charge-controlled transfer current with Qb (Early effect + high injection)
- *   • Non-ideal base currents (Ise, Isc leakage components)
- *   • Reverse active region (br, Is/br)
- *   • Full analytical Jacobian for Newton-Raphson convergence
- *
- * Parameters used from SimulationTransistorElement:
- *   is, beta(=bf), br, vaf, var, nf, nr, ne, nc, ise, isc, ikf, ikr,
- *   cjeFarads, cjcFarads (junction capacitances handled in transient.ts)
+ * @param transistor  Element parameters.
+ * @param volts       Compact node-voltage estimate buffer (estBuf from Newton loop).
+ * @param bi          Compact base index into volts; -1 if base is grounded.
+ * @param ci          Compact collector index; -1 if grounded.
+ * @param ei          Compact emitter index; -1 if grounded.
+ * @param prevVolts   Previous-step compact voltages for SPICE pnjlim; omit in DC mode.
  */
 export function computeTransistorStamp(
     transistor: SimulationTransistorElement,
-    nodeVoltages: Record<number, number>,
-    prevVoltages?: Record<number, number>
+    volts:      Float64Array,
+    bi:         number,
+    ci:         number,
+    ei:         number,
+    prevVolts?: Float64Array
 ): TransistorStamp {
-    const vb = nodeVoltages[transistor.baseNode] ?? 0;
-    const vc = nodeVoltages[transistor.collectorNode] ?? 0;
-    const ve = nodeVoltages[transistor.emitterNode] ?? 0;
+    const vb = bi >= 0 ? volts[bi] : 0;
+    const vc = ci >= 0 ? volts[ci] : 0;
+    const ve = ei >= 0 ? volts[ei] : 0;
 
     const isPnp = transistor.polarity === 'pnp';
 
@@ -83,18 +96,20 @@ export function computeTransistorStamp(
     // ── Junction voltage limiting ────────────────────────────────────────────
     let vbe = vbe_dev;
     let vbc = vbc_dev;
-    if (prevVoltages) {
-        const pb = prevVoltages[transistor.baseNode] ?? 0;
-        const pe = prevVoltages[transistor.emitterNode] ?? 0;
-        const pc = prevVoltages[transistor.collectorNode] ?? 0;
+    if (prevVolts) {
+        const pb = bi >= 0 ? prevVolts[bi] : 0;
+        const pe = ei >= 0 ? prevVolts[ei] : 0;
+        const pc = ci >= 0 ? prevVolts[ci] : 0;
         const prev_vbe = isPnp ? (pe - pb) : (pb - pe);
         const prev_vbc = isPnp ? (pc - pb) : (pb - pc);
         vbe = limitV(vbe_dev, prev_vbe, vt_f, Is);
         vbc = limitV(vbc_dev, prev_vbc, vt_r, Is);
     }
-    // Hard ceiling — prevents exp() overflow (Ge ~0.5V, Si ~0.8V)
-    const vbe_max = Is > 1e-9 ? 20 * vt_f : 30 * vt_f;
-    const vbc_max = Is > 1e-9 ? 20 * vt_r : 30 * vt_r;
+    // Hard ceiling — caps junction current at ~1 A regardless of Is.
+    // Vt*log(1/Is) gives the voltage at which Ic = 1 A; clamped to [10,30]*Vt
+    // so Ge (Is=10µA) gets ~0.3 V and Si (Is=1pA) gets ~0.72 V.
+    const vbe_max = Math.max(10 * vt_f, Math.min(30 * vt_f, vt_f * Math.log(1 / Is)));
+    const vbc_max = Math.max(10 * vt_r, Math.min(30 * vt_r, vt_r * Math.log(1 / Is)));
     vbe = Math.min(vbe, vbe_max);
     vbc = Math.min(vbc, vbc_max);
 
@@ -170,11 +185,12 @@ export function computeTransistorStamp(
     const gpi_raw   = dIbe_dvbe;
     const gmu_b_raw = dIbc_dvbc;              // ∂Ib/∂Vbc = ∂Ibc_total/∂Vbc
 
-    // Clamp to physical range. GMAX = 5 S corresponds to Ic ≈ 130 mA at room
-    // temperature — well above the 2SB56's continuous current rating. This is
-    // far more conservative than 100 S and prevents Newton from oscillating
-    // between iterations when the transistor is driven hard.
-    const GMAX = 5;
+    // Clamp to physical range. GMAX = 0.1 S keeps gm below 1/10Ω, which is
+    // still ~4 mA/mV — far above any typical operating point in this kit's
+    // 100Ω–100kΩ resistor range. Higher values (e.g. 5 S) overwhelm node
+    // equations by 238,000:1 vs the 47kΩ (21µS) resistors and cause Newton
+    // to oscillate rather than converge.
+    const GMAX = 0.1;
     const gm    = clamp(gm_raw,    1e-12, GMAX);
     const gmu   = clamp(gmu_raw,  -GMAX, GMAX);
     const gBe   = clamp(gpi_raw,   1e-12, GMAX);    // = gpi
@@ -184,8 +200,28 @@ export function computeTransistorStamp(
     // No separate gCe (output conductance) — it's embedded in gmu via Early effect
 
     // ── Newton-Raphson companion current sources ──────────────────────────────
-    // Disabled for stability — pure conductance model.
-    // Non-zero companion currents create oscillation when inductors are present.
-    // The conductance terms (gm, gmu, gBe, gBc) are sufficient to converge.
-    return { gBe, gBc, gm, gmu, gpi: gBe, gmu_b, iEqB: 0, iEqC: 0, iEqE: 0 };
+    // Companions are only computed when prevVoltages is provided (i.e., transient mode
+    // with warm-start). DC solve uses pure conductance (companions = 0) because the
+    // limitV clamp requires many steps to traverse large Vbe ranges from cold start.
+    //
+    // After the gm stamp correction, gm*(Vb-Ve) represents "current leaving C / entering E"
+    // for both NPN and PNP (sign encoded by Vb-Ve direction). The companion corrects for
+    // the nonlinear residual: iEq = s_pol*I_device - conductance_linearization.
+    // s_pol = +1 NPN (Ic leaves C), -1 PNP (Ic enters C from transistor).
+    if (!prevVolts) {
+        return { gBe, gBc, gm, gmu, gpi: gBe, gmu_b, iEqB: 0, iEqC: 0, iEqE: 0 };
+    }
+
+    const s_pol = isPnp ? -1 : 1;
+    // Companion uses the CLAMPED junction voltage (vbe/vbc) converted to
+    // node-voltage frame.  This intentionally creates a "pull" toward the
+    // clamped operating point, helping Newton converge from a wrong estimate.
+    const vbe_node = isPnp ? -vbe : vbe;   // Vb - Ve (node-voltage form)
+    const vbc_node = isPnp ? -vbc : vbc;   // Vb - Vc
+
+    const iEqC = s_pol * Ic - gm * vbe_node - gmu * vbc_node;
+    const iEqB = s_pol * Ib - gBe * vbe_node - gBc * vbc_node;
+    const iEqE = -(iEqC + iEqB);
+
+    return { gBe, gBc, gm, gmu, gpi: gBe, gmu_b, iEqB, iEqC, iEqE };
 }

@@ -17,11 +17,10 @@
 const BUFFER_SIZE = 32768; // power-of-2 → ~0.74 s at 44100 Hz
 const BUFFER_MASK = BUFFER_SIZE - 1;
 
-// Target fill: large enough to ride out a pulse-phase stall in the simulator.
-// Each pulse can take ~100-200ms wall-time during which no samples arrive;
-// at 44.1kHz that's ~5000-9000 samples that must already be in the buffer.
-// 8192 samples ≈ 186ms — chosen as power-of-two for clean wraparound.
-const TARGET_FILL = 8192;
+// Target fill: small enough for responsive audio, large enough to ride out
+// the worker's per-tick (~4 ms) production cadence and brief solver stalls.
+// 768 samples ≈ 16 ms at 48 kHz / 17 ms at 44.1 kHz.
+const TARGET_FILL = 768;
 
 // Report fill to main thread every N process() calls.
 const REPORT_EVERY = 16;
@@ -91,7 +90,7 @@ class SpeakerSampleProcessor extends AudioWorkletProcessor {
 
 			if (event.data.type === 'samples') {
 				const values = event.data.values;
-				if (!Array.isArray(values)) return;
+				if (!values || typeof values.length !== 'number') return;
 				for (let i = 0; i < values.length; i++) {
 					const v = +values[i];
 					if (!isFinite(v)) continue;

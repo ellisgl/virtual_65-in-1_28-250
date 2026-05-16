@@ -1,0 +1,25 @@
+[package]
+name = "sim-wasm"
+version = "0.1.0"
+edition = "2021"
+description = "wasm-bindgen wrapper around sim-core for the browser"
+license = "MIT OR Apache-2.0"
+
+[lib]
+# cdylib is required for wasm-pack — emits a single wasm artifact that
+# wasm-bindgen post-processes with JS glue.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+sim-core = { path = "../sim-core" }
+wasm-bindgen = "0.2.121"
+
+# Tiny allocator — produces ~10 KB less wasm than the default dlmalloc and
+# is more than adequate for our allocation pattern (preallocated buffers,
+# almost zero allocation in the hot path).
+wee_alloc = { version = "0.4", optional = true }
+
+[features]
+default = []
+# `wee_alloc` shrinks the wasm binary; turn it on for production builds.
+small-allocator = ["wee_alloc"]

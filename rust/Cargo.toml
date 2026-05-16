@@ -1,0 +1,20 @@
+[workspace]
+resolver = "2"
+members = ["sim-core", "sim-wasm"]
+
+[profile.release]
+# Smaller wasm, faster cold load. LTO costs a bit of compile time but pays
+# back at simulation runtime — the kernels here are tight numeric loops.
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+
+[profile.bench]
+inherits = "release"
+
+# A debug-symbols build that's still optimized — useful when running
+# `wasm-pack build --profiling` to get readable flamecharts in DevTools.
+[profile.profiling]
+inherits = "release"
+debug = true

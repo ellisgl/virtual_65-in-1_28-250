@@ -1,0 +1,19 @@
+[package]
+name = "sim-core"
+version = "0.1.0"
+edition = "2021"
+description = "Pure-Rust circuit simulation kernels for the virtual 65-in-1 kit"
+license = "MIT OR Apache-2.0"
+
+[lib]
+# rlib so the wasm crate can depend on us; cdylib not needed at this layer.
+crate-type = ["rlib"]
+
+[dependencies]
+# Intentionally empty.  sim-core is a pure-Rust core with NO foreign
+# dependencies — easy to test on host, cheap to compile, easy to audit.
+# wasm-bindgen lives one layer up in sim-wasm.
+
+[dev-dependencies]
+# Floating-point comparison helpers for the test suite.
+approx = "0.5"
