@@ -1,7 +1,7 @@
 /**
  * Parity test: TypeScript vs WASM sparse LU.
  *
- * Run after building the WASM module (`cd rust && ./build.sh`).  Loads both
+ * Run after building the WASM module (in the `rust-e-sim` repo).  Loads both
  * implementations, runs the exact same inputs through each, asserts outputs
  * match within floating-point tolerance.
  *
@@ -9,7 +9,7 @@
  *   1. Add a route that imports this file and calls `runSparseParityTests()`.
  *   2. Open the page in the browser and check the console.
  *
- * To run as a node-style script with bun:
+ * To run as a script with bun:
  *   bun scripts/test-sparse-parity.ts
  *
  * Note: Vite serves the .wasm with the right MIME type; bun may need

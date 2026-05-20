@@ -9,30 +9,24 @@ step fail → infinite loop.
 
 v2 adds matching NaN guards to `solve_dc`.
 
-## CRITICAL: you must rebuild the wasm
-This fix is a Rust change.  Replacing `transient.rs` alone does NOTHING
-to the running browser — the wasm binary in `static/audio/sim_wasm_bg.wasm`
-and `src/lib/sim/wasm/sim_wasm_bg.wasm` was compiled before this change.
+## Building WASM
+The Rust simulator code is included as a git submodule in the `rust/` directory.
 
-To verify the fix is deployed:
-
+### Initial Setup
+If you just cloned this repository, you'll need to initialize the submodule:
 ```bash
-cd path/to/project/rust
-# 1. Confirm tests pass (verifies the .rs file is updated)
-cargo test -p sim-core --lib transient::nan_in_state_is_caught_not_committed
-# Expected: "test transient::tests::nan_in_state_is_caught_not_committed ... ok"
-
-# 2. Rebuild the wasm binary
-./build.sh
-
-# 3. Compare timestamps to confirm rebuild happened
-ls -la ../static/audio/sim_wasm_bg.wasm
-ls -la ../src/lib/sim/wasm/sim_wasm_bg.wasm
-# Both should have just-now timestamps.
+git submodule update --init --recursive
 ```
 
-Then hard-reload the browser tab (Ctrl+Shift+R / Cmd+Shift+R, NOT regular
-reload) to force Chrome to drop its cached wasm.
+### Building
+To rebuild the WASM binary and update the artifacts in `static/audio/`:
+```bash
+bun run wasm:build
+```
+This requires `wasm-pack` to be installed on your system.
+
+### Verification
+To verify the fix is deployed, hard-reload the browser tab (Ctrl+Shift+R / Cmd+Shift+R) to force the browser to drop its cached WASM.
 
 ## Expected log after rebuild
 For the siren, simNaN counts should drop dramatically — from ~135 000/sec

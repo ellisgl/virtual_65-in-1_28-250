@@ -1,7 +1,7 @@
 /**
  * Parity test: TypeScript vs WASM element stamps.
  *
- * Run after building the WASM module (`cd rust && ./build.sh`).  Drives
+ * Run after building the WASM module (in the `rust-e-sim` repo).  Drives
  * both implementations through a battery of cases and asserts agreement to
  * within 1e-12 on every output field.
  *

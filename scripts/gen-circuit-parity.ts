@@ -13,7 +13,7 @@
  * parity-tested in tests/parity_stamps.rs.
  *
  * Run with:
- *   bun scripts/gen-circuit-parity.ts > rust/sim-core/tests/parity_circuit.rs
+ *   bun scripts/gen-circuit-parity.ts > rust/rust-e-sim-core/tests/parity_circuit.rs
  */
 
 import { compileNetlist, initializeTransientState, stepTransientNetlist } from '$lib/sim/transient';
@@ -129,7 +129,7 @@ const cases: Case[] = [
     },
     // NOTE: a BJT-bearing transient parity case was attempted and removed.
     // The DC operating point IS bit-exact between TS and Rust (verified in
-    // sim-core/src/transient.rs::tests::common_emitter_bjt_dc_via_solve_dc)
+    // rust-e-sim-core/src/transient.rs::tests::common_emitter_bjt_dc_via_solve_dc)
     // but the BJT TRANSIENT diverges by O(1 V) per step because both
     // implementations run unconverged Newton iterates (20-iter budget, no
     // convergence guarantee) with the GMAX-clamped Gummel-Poon model;
@@ -188,9 +188,9 @@ out += '// Each test builds a small circuit in Rust identical to one driven thro
 out += '// the TypeScript reference solver, runs the same number of backward-Euler\n';
 out += '// steps with the same dt, and asserts node voltages match TS to within 1e-9\n';
 out += '// at every sampled step.\n\n';
-out += 'use sim_core::compile::compile_netlist;\n';
-out += 'use sim_core::netlist::{Element, Netlist};\n';
-out += 'use sim_core::transient::{step_with_config, StepConfig, TransientState};\n\n';
+out += 'use rust_e_sim_core::compile::compile_netlist;\n';
+out += 'use rust_e_sim_core::netlist::{Element, Netlist};\n';
+out += 'use rust_e_sim_core::transient::{step_with_config, StepConfig, TransientState};\n\n';
 
 for (const tc of cases) {
     const built = tc.build();

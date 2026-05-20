@@ -123,7 +123,6 @@ export class SimRustWorkletHost {
                 console.log('[host debug] Verified: "ready" message read from port handler!');
                 this.handleReadySignal();
             } else {
-                console.log({ 'message': msg?.message });
                 this.onMessage(msg);
             }
         };
@@ -160,6 +159,7 @@ export class SimRustWorkletHost {
         this.wires = wires;
         const netlist = this.buildNetlist(wires, controls);
         const wasmModule = await loadWasmModule();
+        console.log('[host] posting configure to worklet, elements:', netlist.elements.length);
         this.node.port.postMessage({ type: 'configure', netlist, wasmModule, audioProbe });
     }
 
@@ -197,11 +197,14 @@ export class SimRustWorkletHost {
         return buildSimulationNetlist(topology, KIT_COMPONENTS, controls);
     }
 
-    private onMessage(msg: { type?: string; nodeVoltages?: NodeVoltages; error?: string }): void {
+    private onMessage(msg: { type?: string; nodeVoltages?: NodeVoltages; error?: string; state?: any }): void {
         if (!msg || !msg.type) return;
         switch (msg.type) {
             case 'snapshot':
                 this.onSnapshot?.(msg.nodeVoltages ?? {});
+                break;
+            case 'debug':
+                console.log('[worklet debug]:', msg.state);
                 break;
             case 'error':
                 console.error('[sim-rust-worklet] error:', msg.error);
@@ -241,8 +244,8 @@ export class SimRustWorkletHost {
     }
 
     private handleReadySignal() {
+        this.isAlreadyReady = true;
         if (this.resolveReady) {
-            this.isAlreadyReady = true;
             this.resolveReady();
             this.resolveReady = null;
         }

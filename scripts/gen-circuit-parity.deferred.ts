@@ -13,7 +13,7 @@
  * parity-tested in tests/parity_stamps.rs.
  *
  * Run with:
- *   bun scripts/gen-circuit-parity.ts > rust/sim-core/tests/parity_circuit.rs
+ *   bun scripts/gen-circuit-parity.ts > rust/rust-e-sim-core/tests/parity_circuit.rs
  */
 
 import { compileNetlist, initializeTransientState, stepTransientNetlist } from '$lib/sim/transient';
@@ -138,9 +138,9 @@ out += '// Each test builds a small circuit in Rust identical to one driven thro
 out += '// the TypeScript reference solver, runs the same number of backward-Euler\n';
 out += '// steps with the same dt, and asserts node voltages match TS to within 1e-9\n';
 out += '// at every sampled step.\n\n';
-out += 'use sim_core::compile::compile_netlist;\n';
-out += 'use sim_core::netlist::{Element, Netlist};\n';
-out += 'use sim_core::transient::{step, TransientState};\n\n';
+out += 'use rust_e_sim_core::compile::compile_netlist;\n';
+out += 'use rust_e_sim_core::netlist::{Element, Netlist};\n';
+out += 'use rust_e_sim_core::transient::{step, TransientState};\n\n';
 out += 'const TOL: f64 = 1e-9;\n\n';
 
 for (const tc of cases) {

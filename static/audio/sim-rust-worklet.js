@@ -32,7 +32,7 @@
  * pass it to wasm-bindgen's init() which accepts a precompiled module.
  *
  * The wasm-bindgen JS glue must be present as a sibling file (`./sim_wasm.js`).
- * The Rust build.sh copies it into /static/audio/ alongside this worklet.
+ * The Rust build process (in the rust-e-sim repo) copies it into /static/audio/ alongside this worklet.
  */
 
 // ── WASM glue ────────────────────────────────────────────────────────────────
@@ -68,7 +68,7 @@ import init,  {
 // indistinguishable from Phase 3 audio (modulo the actual simulator output).
 
 const AUDIO_SCALE     = 3;       // tanh knee (V)
-const DC_BLOCK_ALPHA  = 0.9985;  // one-pole DC blocker
+const DC_BLOCK_R      = 0.995;   // DC-blocker coefficient (HPF ~1.5 Hz @ 48 kHz)
 const FADE_IN_SAMPLES = 256;     // ~6 ms ramp on first connect
 // Scale factor for the 'current' audio probe.  SPK1 voice-coil current
 // is typically tens of mA; multiply by ~100 (≈ 1/Rvc with kit's 8Ω
@@ -210,6 +210,12 @@ class SimRustProcessor extends AudioWorkletProcessor {
 
         this.sim = null;
         this.running = false;
+        this.wasmReady = false;
+
+        // Diagnostics
+        this.configureCount = 0;
+        this.lastConfigureStatus = 'none';
+        this.lastError = null;
 
         // 1. Wire the port listeners immediately
         this.port.onmessage = (e) => this.onmessage(e.data);
@@ -244,7 +250,8 @@ class SimRustProcessor extends AudioWorkletProcessor {
         this.groundNodeId = null;
 
         // Audio post-processing state.
-        this.dcEst = 0;
+        this.dcPrevIn  = 0;
+        this.dcPrevOut = 0;
         this.prevV = 0;
         this.audioPhase = 0;            // sim-time carryover between quanta
         this.fadePos = 0;
@@ -279,25 +286,36 @@ class SimRustProcessor extends AudioWorkletProcessor {
         try {
             switch (msg.type) {
                 case 'configure':
-                    // Build a fresh simulator from the incoming netlist.
-                    // Wasm is already mounted synchronously in the
-                    // constructor via initSync(processorOptions.wasmModule),
-                    // so there's no init handshake to wait on here.
-                    this.disposeSim();
-                    this.sim = buildSimulator(msg.netlist);
-                    if (this.sim) {
-                        this.sim.solve_dc();
-                        this.cacheSpeakerProbes(msg.netlist);
-                        this.knownNodeIds = collectTopologyNodeIds(msg.netlist);
-                        this.groundNodeId = msg.netlist.groundNodeId;
-                        console.log('[worklet] configure: simulator built with',
-                            msg.netlist?.elements?.length, 'elements, DC solved');
-                    } else {
-                        console.warn('[worklet] configure: buildSimulator returned null (empty/invalid netlist)');
+                    this.configureCount++;
+                    try {
+                        // Build a fresh simulator from the incoming netlist.
+                        // Wasm is already mounted synchronously in the
+                        // constructor via initSync(processorOptions.wasmModule),
+                        // so there's no init handshake to wait on here.
+                        this.disposeSim();
+                        this.sim = buildSimulator(msg.netlist);
+                        this.elementCount = msg.netlist?.elements?.length || 0;
+                        if (this.sim) {
+                            this.sim.solve_dc();
+                            this.cacheSpeakerProbes(msg.netlist);
+                            this.knownNodeIds = collectTopologyNodeIds(msg.netlist);
+                            this.groundNodeId = msg.netlist.groundNodeId;
+                            this.lastConfigureStatus = 'success';
+                            console.log('[worklet] configure: simulator built with',
+                                msg.netlist?.elements?.length, 'elements, DC solved');
+                        } else {
+                            this.lastConfigureStatus = 'failed_null_sim';
+                            console.warn('[worklet] configure: buildSimulator returned null (empty/invalid netlist)');
+                        }
+                    } catch (e) {
+                        this.lastConfigureStatus = 'failed_exception';
+                        this.lastError = String(e && e.stack ? e.stack : e);
+                        throw e;
                     }
                     if (msg.audioProbe) this.audioProbe = msg.audioProbe;
                     this.adaptiveDt = DT_INIT;
-                    this.dcEst = 0;
+                    this.dcPrevIn  = 0;
+                    this.dcPrevOut = 0;
                     this.prevV = 0;
                     this.audioPhase = 0;
                     this.fadePos = 0;
@@ -312,7 +330,11 @@ class SimRustProcessor extends AudioWorkletProcessor {
                     // restore.  Eliminates the audio glitch the old
                     // rebuild-from-scratch approach produced on every
                     // pot sweep frame.
-                    if (!this.sim) break;
+                    if (!this.sim) {
+                        console.log('[worklet] updateControls: no sim exists, falling back to full configure');
+                        this.onmessage({ type: 'configure', netlist: msg.netlist });
+                        break;
+                    }
                     const snap = {
                         nodeVolts:            this.sim.export_node_volts(),
                         prevNodeVolts:        this.sim.export_prev_node_volts(),
@@ -446,7 +468,7 @@ class SimRustProcessor extends AudioWorkletProcessor {
         }
 
         if (real_sim_nan) {
-            // Genuine sim NaN — propagating it would poison dcEst → all
+            // Genuine sim NaN — propagating it would poison the DC blocker → all
             // subsequent audio samples become NaN → browser silences
             // them.  Return 0 so the audio chain stays clean.  Worklet's
             // step-failure path is responsible for DC-reseed recovery.
@@ -473,6 +495,30 @@ class SimRustProcessor extends AudioWorkletProcessor {
 
     process(_inputs, outputs, _params) {
         try {
+            if (this._debugCount === undefined) this._debugCount = 0;
+            if (this._debugCount % 375 === 0) {
+                // Heartbeat to host every ~375 quanta (~1s at 48kHz/128)
+                this.post({
+                    type: 'debug',
+                    state: {
+                        running: this.running,
+                        hasSim: !!this.sim,
+                        wasmReady: this.wasmReady,
+                        bootTonePos: this.bootTonePos,
+                        speakerA: this.speakerTopA,
+                        speakerB: this.speakerTopB,
+                        t1P: this.t1PrimaryTop,
+                        t1C: this.t1CenterTop,
+                        audioProbe: this.audioProbe,
+                        configureCount: this.configureCount,
+                        lastConfigureStatus: this.lastConfigureStatus,
+                        lastError: this.lastError,
+                        elementCount: this.elementCount
+                    }
+                });
+            }
+            this._debugCount++;
+
             return this._processBody(_inputs, outputs, _params);
         } catch (err) {
             // AudioWorkletProcessor doesn't surface throws — they get
@@ -570,7 +616,7 @@ class SimRustProcessor extends AudioWorkletProcessor {
                     `simNaN=${simNan} ` +
                     `spk[${this.spkMinSinceLog.toFixed(2)}..${this.spkMaxSinceLog.toFixed(2)}]=${spkPp.toFixed(2)} ` +
                     `out[${this.outMinSinceLog.toFixed(3)}..${this.outMaxSinceLog.toFixed(3)}]=${outPp.toFixed(3)} ` +
-                    `dcEst=${this.dcEst.toFixed(3)}`
+                    `dcPrevOut=${this.dcPrevOut.toFixed(3)}`
                 );
             }
             this.framesSinceLog = 0;
@@ -603,24 +649,16 @@ class SimRustProcessor extends AudioWorkletProcessor {
             }
             this.lastWasActive = isActive;
 
-            // DC blocker.  Belt-and-braces guard: speakerV() already
-            // returns 0 for NaN, but if anything slips through and dcEst
-            // becomes non-finite, reset it.  Without this guard, a single
-            // bad sample silently kills audio for the rest of the
-            // session.
-            this.dcEst = this.dcEst * DC_BLOCK_ALPHA + rawSpkV * (1 - DC_BLOCK_ALPHA);
-            if (!Number.isFinite(this.dcEst)) this.dcEst = 0;
-            // Audio chain: DC block → tanh saturator → fade-in.  We
-            // deliberately do NOT apply a cone bandpass here.  A bandpass
-            // resonates on sustained tones (the siren's 1 kHz fundamental
-            // builds up over many cycles) but heavily attenuates single
-            // impulses (the metronome's transformer-kick clicks), creating
-            // a 16-20x volume disparity between continuous-tone circuits
-            // and click-train circuits.  Letting the broad signal through
-            // unfiltered + tanh-saturated gives a more uniform perceived
-            // loudness across kit projects.  The listener's playback
-            // hardware will impose its own frequency response.
-            let s = Math.tanh((rawSpkV - this.dcEst) / AUDIO_SCALE);
+            // DC blocker — classic first-order high-pass:
+            //   y[n] = x[n] - x[n-1] + R * y[n-1]
+            // Responds instantly to DC shifts (no slow convergence),
+            // passes all AC content above ~1.5 Hz at 48 kHz.
+            let dcBlocked = rawSpkV - this.dcPrevIn + DC_BLOCK_R * this.dcPrevOut;
+            if (!Number.isFinite(dcBlocked)) dcBlocked = 0;
+            this.dcPrevIn  = rawSpkV;
+            this.dcPrevOut = dcBlocked;
+            // Audio chain: DC block → tanh saturator → fade-in.
+            let s = Math.tanh(dcBlocked / AUDIO_SCALE);
             // Fade-in on first connect.
             if (this.fadePos < FADE_IN_SAMPLES) {
                 s *= this.fadePos / FADE_IN_SAMPLES;
@@ -691,6 +729,24 @@ class SimRustProcessor extends AudioWorkletProcessor {
 
         this.prevV = prevV;
         this.audioPhase = nextT - simT;
+
+        // Per-quantum output amplitude diagnostic (every ~1s)
+        if (this._outDiagCount === undefined) { this._outDiagCount = 0; this._outDiagMax = 0; this._outDiagNonZero = 0; this._outDiagTotal = 0; }
+        let qMax = 0;
+        let qNonZero = 0;
+        for (let i = 0; i < frames; i++) {
+            const abs = Math.abs(ch0[i]);
+            if (abs > qMax) qMax = abs;
+            if (abs > 1e-6) qNonZero++;
+        }
+        if (qMax > this._outDiagMax) this._outDiagMax = qMax;
+        this._outDiagNonZero += qNonZero;
+        this._outDiagTotal += frames;
+        this._outDiagCount++;
+        if (this._outDiagCount >= 375) {
+            console.log(`[worklet] output 1s: maxAmp=${this._outDiagMax.toFixed(4)} nonZero=${this._outDiagNonZero}/${this._outDiagTotal} (${(100*this._outDiagNonZero/this._outDiagTotal).toFixed(1)}%)`);
+            this._outDiagCount = 0; this._outDiagMax = 0; this._outDiagNonZero = 0; this._outDiagTotal = 0;
+        }
 
         // Snapshot for UI.  Iterate the known node-ID set captured at
         // configure time — node_voltage() returns 0 for unknown IDs which
