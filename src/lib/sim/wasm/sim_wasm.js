@@ -149,6 +149,33 @@ export class Simulator {
         wasm.simulator_add_inductor(this.__wbg_ptr, ptr0, len0, a, b, inductance_henry, !isLikeNone(saturation_current_a), isLikeNone(saturation_current_a) ? 0 : saturation_current_a, ptr1, len1, isLikeNone(coupling_polarity) ? Number.MAX_SAFE_INTEGER : (coupling_polarity) >> 0);
     }
     /**
+     * Add an SPDT relay.  All five terminals are topology node IDs.  The
+     * coil sits between `coil_positive` and `coil_negative`; the contact
+     * connects `common` to either `normally_closed` (rest state) or
+     * `normally_open` (energised state) with low resistance `ron_ohms`,
+     * while the inactive throw is connected with high resistance
+     * `roff_ohms`.  State transitions use coil-current hysteresis: relay
+     * activates when `|I_coil| > on_current`, releases when
+     * `|I_coil| < off_current`.  Pass `off_current < on_current` for
+     * proper Schmitt-trigger behaviour.
+     * @param {string} id
+     * @param {number} coil_positive
+     * @param {number} coil_negative
+     * @param {number} common
+     * @param {number} normally_closed
+     * @param {number} normally_open
+     * @param {number} coil_resistance_ohms
+     * @param {number} ron_ohms
+     * @param {number} roff_ohms
+     * @param {number} on_current
+     * @param {number} off_current
+     */
+    add_relay(id, coil_positive, coil_negative, common, normally_closed, normally_open, coil_resistance_ohms, ron_ohms, roff_ohms, on_current, off_current) {
+        const ptr0 = passStringToWasm0(id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        wasm.simulator_add_relay(this.__wbg_ptr, ptr0, len0, coil_positive, coil_negative, common, normally_closed, normally_open, coil_resistance_ohms, ron_ohms, roff_ohms, on_current, off_current);
+    }
+    /**
      * @param {string} id
      * @param {number} a
      * @param {number} b
@@ -193,6 +220,200 @@ export class Simulator {
     compile() {
         const ret = wasm.simulator_compile(this.__wbg_ptr);
         return ret !== 0;
+    }
+    /**
+     * Snapshot of per-capacitor voltages.
+     * @returns {Float64Array}
+     */
+    export_cap_volts() {
+        const ret = wasm.simulator_export_cap_volts(this.__wbg_ptr);
+        var v1 = getArrayF64FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 8, 8);
+        return v1;
+    }
+    /**
+     * Snapshot of Gear-2 readiness (true once a step has been committed).
+     * @returns {boolean}
+     */
+    export_gear2_ready() {
+        const ret = wasm.simulator_export_gear2_ready(this.__wbg_ptr);
+        return ret !== 0;
+    }
+    /**
+     * Snapshot of per-inductor branch currents.
+     * @returns {Float64Array}
+     */
+    export_inductor_currents() {
+        const ret = wasm.simulator_export_inductor_currents(this.__wbg_ptr);
+        var v1 = getArrayF64FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 8, 8);
+        return v1;
+    }
+    /**
+     * Snapshot of `node_volts` (current MNA unknowns).
+     * @returns {Float64Array}
+     */
+    export_node_volts() {
+        const ret = wasm.simulator_export_node_volts(this.__wbg_ptr);
+        var v1 = getArrayF64FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 8, 8);
+        return v1;
+    }
+    /**
+     * Snapshot of per-capacitor voltages from two steps ago (Gear-2).
+     * @returns {Float64Array}
+     */
+    export_prev_cap_volts() {
+        const ret = wasm.simulator_export_prev_cap_volts(this.__wbg_ptr);
+        var v1 = getArrayF64FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 8, 8);
+        return v1;
+    }
+    /**
+     * Snapshot of the previous step's dt (used to scale the predictor).
+     * @returns {number}
+     */
+    export_prev_dt() {
+        const ret = wasm.simulator_export_prev_dt(this.__wbg_ptr);
+        return ret;
+    }
+    /**
+     * Snapshot of per-inductor currents from two steps ago (Gear-2).
+     * @returns {Float64Array}
+     */
+    export_prev_inductor_currents() {
+        const ret = wasm.simulator_export_prev_inductor_currents(this.__wbg_ptr);
+        var v1 = getArrayF64FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 8, 8);
+        return v1;
+    }
+    /**
+     * Snapshot of `prev_node_volts` (predictor history).
+     * @returns {Float64Array}
+     */
+    export_prev_node_volts() {
+        const ret = wasm.simulator_export_prev_node_volts(this.__wbg_ptr);
+        var v1 = getArrayF64FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 8, 8);
+        return v1;
+    }
+    /**
+     * Snapshot of relay active flags (`true` = energised).  Returned as
+     * `Vec<u8>` since `Vec<bool>` isn't natively exposable through
+     * wasm-bindgen; 0/1 encoding.
+     * @returns {Uint8Array}
+     */
+    export_relay_active() {
+        const ret = wasm.simulator_export_relay_active(this.__wbg_ptr);
+        var v1 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+        return v1;
+    }
+    /**
+     * Snapshot of BJT junction-cap voltages (layout: `[Q0_Vbe, Q0_Vbc, Q1_Vbe, …]`).
+     * @returns {Float64Array}
+     */
+    export_tj_cap_volts() {
+        const ret = wasm.simulator_export_tj_cap_volts(this.__wbg_ptr);
+        var v1 = getArrayF64FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 8, 8);
+        return v1;
+    }
+    /**
+     * @param {Float64Array} v
+     */
+    import_cap_volts(v) {
+        const ptr0 = passArrayF64ToWasm0(v, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        wasm.simulator_import_cap_volts(this.__wbg_ptr, ptr0, len0);
+    }
+    /**
+     * @param {boolean} ready
+     */
+    import_gear2_ready(ready) {
+        wasm.simulator_import_gear2_ready(this.__wbg_ptr, ready);
+    }
+    /**
+     * @param {Float64Array} v
+     */
+    import_inductor_currents(v) {
+        const ptr0 = passArrayF64ToWasm0(v, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        wasm.simulator_import_inductor_currents(this.__wbg_ptr, ptr0, len0);
+    }
+    /**
+     * Restore `node_volts`.  Silently ignored on length mismatch.
+     * @param {Float64Array} v
+     */
+    import_node_volts(v) {
+        const ptr0 = passArrayF64ToWasm0(v, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        wasm.simulator_import_node_volts(this.__wbg_ptr, ptr0, len0);
+    }
+    /**
+     * @param {Float64Array} v
+     */
+    import_prev_cap_volts(v) {
+        const ptr0 = passArrayF64ToWasm0(v, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        wasm.simulator_import_prev_cap_volts(this.__wbg_ptr, ptr0, len0);
+    }
+    /**
+     * @param {number} dt
+     */
+    import_prev_dt(dt) {
+        wasm.simulator_import_prev_dt(this.__wbg_ptr, dt);
+    }
+    /**
+     * @param {Float64Array} v
+     */
+    import_prev_inductor_currents(v) {
+        const ptr0 = passArrayF64ToWasm0(v, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        wasm.simulator_import_prev_inductor_currents(this.__wbg_ptr, ptr0, len0);
+    }
+    /**
+     * @param {Float64Array} v
+     */
+    import_prev_node_volts(v) {
+        const ptr0 = passArrayF64ToWasm0(v, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        wasm.simulator_import_prev_node_volts(this.__wbg_ptr, ptr0, len0);
+    }
+    /**
+     * @param {Uint8Array} v
+     */
+    import_relay_active(v) {
+        const ptr0 = passArray8ToWasm0(v, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        wasm.simulator_import_relay_active(this.__wbg_ptr, ptr0, len0);
+    }
+    /**
+     * @param {Float64Array} v
+     */
+    import_tj_cap_volts(v) {
+        const ptr0 = passArrayF64ToWasm0(v, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        wasm.simulator_import_tj_cap_volts(this.__wbg_ptr, ptr0, len0);
+    }
+    /**
+     * Per-inductor branch current by component id.  Returns 0.0 if the
+     * component is unknown or the simulator hasn't been compiled/stepped.
+     *
+     * Sign convention: positive current flows from terminal `a` to terminal
+     * `b` (the order passed to `add_inductor`).  For an audio speaker
+     * modelled as `Rvc + Lvc` in series, this is the actual *cone-driving*
+     * current — proportional to acoustic output force (F = B·L·I).  Often
+     * a better audio probe than the voltage across the speaker terminals,
+     * which mixes resistive drop and inductive EMF.
+     * @param {string} id
+     * @returns {number}
+     */
+    inductor_current(id) {
+        const ptr0 = passStringToWasm0(id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.simulator_inductor_current(this.__wbg_ptr, ptr0, len0);
+        return ret;
     }
     /**
      * Create an empty simulator with `ground_node_id` as the reference.
@@ -258,6 +479,26 @@ export class Simulator {
     step_with_gear(dt, gear) {
         const ret = wasm.simulator_step_with_gear(this.__wbg_ptr, dt, gear);
         return StepResult.__wrap(ret);
+    }
+    /**
+     * Voltage-source branch current by component id.  Returns 0.0 if the
+     * component is unknown or the simulator hasn't been compiled/stepped.
+     *
+     * Sign convention (matches TS `sourceCurrents` exactly): the value is
+     * the MNA augmented unknown, where a positive current flows from the
+     * EXTERNAL circuit INTO the + terminal of the source — i.e. the
+     * source is in *sink* mode.  A battery driving a load is in *source*
+     * mode, so its branch current is **negative** with magnitude equal
+     * to the load current.  Callers that want a user-friendly "supply
+     * current" should negate the value at the call site.
+     * @param {string} id
+     * @returns {number}
+     */
+    voltage_source_current(id) {
+        const ptr0 = passStringToWasm0(id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.simulator_voltage_source_current(this.__wbg_ptr, ptr0, len0);
+        return ret;
     }
 }
 if (Symbol.dispose) Simulator.prototype[Symbol.dispose] = Simulator.prototype.free;
@@ -674,6 +915,11 @@ function _assertClass(instance, klass) {
     if (!(instance instanceof klass)) {
         throw new Error(`expected instance of ${klass.name}`);
     }
+}
+
+function getArrayF64FromWasm0(ptr, len) {
+    ptr = ptr >>> 0;
+    return getFloat64ArrayMemory0().subarray(ptr / 8, ptr / 8 + len);
 }
 
 function getArrayI32FromWasm0(ptr, len) {

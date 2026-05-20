@@ -8,9 +8,12 @@
 	import KeySwitchOverlay from '$lib/components/board/KeySwitchOverlay.svelte';
 	import LampGlowOverlay from '$lib/components/board/LampGlowOverlay.svelte';
 	import VoltmeterOverlay from '$lib/components/board/VoltmeterOverlay.svelte';
-	import { buildSimulationNetlist, solveDcNetlist } from '$lib/sim';
+	import { buildSimulationNetlist } from '$lib/sim';
+	import { initRustDc, isRustDcReady, solveDcRust } from '$lib/sim/dc-rust';
+	import { SimRustWorkletHost } from '$lib/sim/sim-rust-worklet-host';
+	import type { ControlState, WireSpec } from '$lib/sim/sim-rust-worklet-host';
 	import { wiresStore } from '$lib/stores/wires.svelte';
-	import type { ControlState, WireSpec, WorkerToMain } from '$lib/sim/worker-protocol';
+	import type { DcSolution } from '$lib/types';
 
 	const mappedTerminalIds = KIT_TERMINAL_IDS.filter((id) => isTerminalPositionMapped(id));
 	const TERMINAL_SNAP_RADIUS = 4;
@@ -55,11 +58,7 @@
 	let variableResistancePosition = $state(variableResDefaultPosition);
 	let variableCapacitance = $state(variableCapDefault);
 	let switchStates = $state<Record<string, boolean>>({});
-	let solverEngine = $state<'ts' | 'rust'>(
-			(typeof localStorage !== 'undefined' && localStorage.getItem('solverEngine') === 'rust')
-					? 'rust'
-					: 'ts',
-	);
+
 	// ── Controls helper ────────────────────────────────────────────────────────
 	function currentControls(): ControlState {
 		return {
@@ -77,7 +76,25 @@
 			switchStates
 		})
 	);
-	let dc = $derived(solveDcNetlist(netlist));
+
+	// ── DC snapshot via Rust WASM ──────────────────────────────────────────────
+	// The Rust DC path handles relays + floating-throw contacts correctly,
+	// where the legacy TS solver silently dropped relay contact stamps.
+	// Until WASM finishes loading on first paint, we show an empty solution
+	// (ok=false, no voltages); _wasmReady flips reactively, after which
+	// `dc` re-derives through the Rust solver.
+	let _wasmReady = $state(isRustDcReady());
+	$effect(() => {
+		if (_wasmReady) return;
+		initRustDc().then(() => {
+			_wasmReady = true;
+		});
+	});
+
+	const EMPTY_DC: DcSolution = {
+		ok: false, nodeVoltages: {}, sourceCurrents: {}, warnings: []
+	};
+	let dc = $derived(_wasmReady ? solveDcRust(netlist) : EMPTY_DC);
 
 	let transientResetKey = $derived(
 		JSON.stringify({
@@ -88,23 +105,31 @@
 		})
 	);
 
-	// ── Worker state ───────────────────────────────────────────────────────────
-	let simWorker: Worker | null = $state(null);
-	let workerVoltages = $state<Record<number, number>>({});
+	// ── Audio worklet host (runs sim in the audio thread) ─────────────────────
+	// Replaces the Phase 3 Web Worker + speaker-worklet ring buffer pipeline.
+	// The worklet host instantiates an AudioWorkletNode that hosts the Rust
+	// simulator directly: process() steps the sim and emits audio samples in
+	// one shot.  Snapshots come back over the port for UI updates.
+	let workletHost = $state<SimRustWorkletHost | null>(null);
+	let workletVoltages = $state<Record<number, number>>({});
 	let transientRunning = $state(false);
 
 	// ── Audio ─────────────────────────────────────────────────────────────────
 	let speakerAudioEnabled = $state(false);
 	let audioContext: AudioContext | null = null;
-	let audioWorkletNode: AudioWorkletNode | null = null;
 	let audioMasterGain: GainNode | null = null;
 	let audioHighpass: BiquadFilterNode | null = null;
-	let audioSampleRate = $state<number | null>(null);
-	let workletBufferFill = $state(0);
 
 	// ── Display ────────────────────────────────────────────────────────────────
+	// activeNodeVoltages reflects the "current" voltage at each node.  When
+	// the transient simulation is actively running, the worklet's most recent
+	// snapshot is the freshest source.  When transient is stopped, snapshots
+	// may be stale — falling back to `dc.nodeVoltages` keeps the UI showing
+	// the correct DC operating point in response to switch / pot changes.
 	let activeNodeVoltages = $derived(
-		Object.keys(workerVoltages).length > 0 ? workerVoltages : dc.nodeVoltages
+		transientRunning && Object.keys(workletVoltages).length > 0
+			? workletVoltages
+			: dc.nodeVoltages
 	);
 	let lampResistanceOhms = $derived(
 		(() => {
@@ -202,97 +227,58 @@
 		})()
 	);
 
-	// ── Worker lifecycle ───────────────────────────────────────────────────────
+	// ── Worklet host lifecycle ─────────────────────────────────────────────────
+	// The worklet runs sim in the audio thread, so its lifetime is tied to the
+	// AudioContext.  It's brought up when the user enables audio (startSpeakerAudio)
+	// and torn down when audio stops or the component unmounts.
 
-	$effect(() => {
-		const w = new Worker(new URL('../sim/sim-worker.ts', import.meta.url), { type: 'module' });
-
-		w.onerror = (e) => {
-			console.error('[sim-worker] Worker error:', e.message ?? e);
-		};
-
-		w.onmessage = (e: MessageEvent<WorkerToMain>) => {
-			const msg = e.data;
-			if (e.data.type === 'engineReady') {
-				console.log(`solver engine: ${e.data.engine}`);
-				if (solverEngine === 'rust' && e.data.engine === 'ts') {
-					console.warn('Rust requested but fell back to TS — build with `cd rust && ./build.sh`');
-				}
-			}
-
-			if (msg.type === 'snapshot') {
-				workerVoltages = msg.nodeVoltages;
-			} else if (msg.type === 'audioSamples') {
-				if (audioWorkletNode) {
-					// Zero-copy transfer of the Float32Array buffer from main thread to
-					// worklet.  The worklet accepts both Array and Float32Array (see the
-					// typeof guard in speaker-worklet.js).  Avoiding Array.from() removes
-					// a full-batch allocation+copy on every flush — important now that
-					// flushes happen ~250/sec instead of ~23/sec.
-					audioWorkletNode.port.postMessage(
-						{ type: 'samples', values: msg.samples },
-						[msg.samples.buffer]
-					);
-				}
-			}
-		};
-
-		simWorker = w;
-
-		return () => {
-			w.postMessage({ type: 'stop' });
-			w.terminate();
-			simWorker = null;
-		};
-	});
-
-	// Topology changed → full worker reset.
+	// Wire topology change → full worklet reset (rebuild from new wires).
 	$effect(() => {
 		transientResetKey;
-		const worker = simWorker;
-		if (!worker) return;
+		const host = workletHost;
+		if (!host) return;
 
 		untrack(() => {
+			// Skip during initial boot — connect() awaits readyPromise, so
+			// the host can briefly exist before its worklet thread has
+			// mounted WASM.  Sending configure too early would race the
+			// constructor.
+			if (!host.isReady()) return;
+
 			const wasRunning = transientRunning;
-			worker.postMessage({ type: 'stop' });
+			host.stop();
 			transientRunning = false;
-			workerVoltages = {};
+			workletVoltages = {};
 
 			const wires: WireSpec[] = wiresStore.wires.map((w) => ({
 				fromTerminal: w.fromTerminal,
 				toTerminal:   w.toTerminal
 			}));
-			console.log('configure with engine:', solverEngine);
-			worker.postMessage({ type: 'configure', wires, controls: currentControls(), engine: solverEngine });
 
-			if (wasRunning && netlist.elements.length > 0 && netlist.groundNodeId !== null) {
-				worker.postMessage({ type: 'start' });
-				transientRunning = true;
-			}
+			void host.configure(wires, currentControls()).then(() => {
+				if (wasRunning && netlist.elements.length > 0 && netlist.groundNodeId !== null) {
+					host.start();
+					transientRunning = true;
+				}
+			});
 		});
 	});
 
-	// Controls changed → soft recompile (preserve transient state).
+	// Controls changed → soft recompile (state-preserving in the worklet).
 	$effect(() => {
 		variableResistancePosition;
 		variableCapacitance;
 		switchStates;
-		const worker = simWorker;
-		if (!worker) return;
-		untrack(() => {
-			worker.postMessage({ type: 'updateControls', controls: currentControls() });
-		});
-	});
-
-	// Audio sample rate → tell the worker.
-	$effect(() => {
-		const rate = audioSampleRate;
-		untrack(() => simWorker?.postMessage({ type: 'audioRate', sampleRate: rate }));
+		const host = workletHost;
+		// Same boot-race guard as the wire-change effect above.
+		if (!host || !host.isReady()) return;
+		untrack(() => host.updateControls(currentControls()));
 	});
 
 	onDestroy(() => {
-		simWorker?.postMessage({ type: 'stop' });
-		simWorker?.terminate();
+		workletHost?.stop();
+		workletHost?.dispose();
+		workletHost = null;
 		stopSpeakerAudio();
 	});
 
@@ -302,40 +288,42 @@
 		if (typeof window === 'undefined') return;
 		if (audioContext) return;
 
-		audioContext   = new AudioContext();
+		audioContext = new AudioContext();
 		audioMasterGain = audioContext.createGain();
-		audioMasterGain.gain.value = 0.25;
+		// 1.0 not 0.25: the worklet's chain (tanh + bandpass + bpGain)
+		// already attenuates significantly (~-20 dB at the siren's typical
+		// 1 kHz against the 250 Hz-centred cone bandpass).  Stacking
+		// another -12 dB makes the siren barely audible.  tanh saturation
+		// prevents clipping so we don't need master-side headroom.
+		audioMasterGain.gain.value = 1.0;
 		audioHighpass  = audioContext.createBiquadFilter();
 		audioHighpass.type = 'highpass';
 		audioHighpass.frequency.value = 25;
 
-		try {
-			await audioContext.audioWorklet.addModule('/audio/speaker-worklet.js');
-			audioWorkletNode = new AudioWorkletNode(audioContext, 'speaker-sample-processor');
-			audioSampleRate  = audioContext.sampleRate;
+		audioHighpass.connect(audioMasterGain);
+		audioMasterGain.connect(audioContext.destination);
 
-			audioWorkletNode.port.onmessage = (e) => {
-				if (e.data?.type === 'bufferFill') {
-					workletBufferFill = e.data.available ?? 0;
-					simWorker?.postMessage({ type: 'backpressure', bufferFill: workletBufferFill });
-				}
-			};
-			audioWorkletNode.connect(audioHighpass);
+		try {
+			const host = new SimRustWorkletHost(audioContext);
+			host.onSnapshot = (volts) => { workletVoltages = volts; };
+			host.onError    = (msg)   => { console.error('[worklet] sim failure:', msg); };
+			await host.connect(audioHighpass);
+
+			// Initial configure with current wires + controls.  The worklet
+			// stays idle (running=false) until start() is called.
+			const wires: WireSpec[] = wiresStore.wires.map((w) => ({
+				fromTerminal: w.fromTerminal,
+				toTerminal:   w.toTerminal
+			}));
+			await host.configure(wires, currentControls());
+			workletHost = host;
 		} catch (err) {
-			console.error('[audio] Failed to load speaker worklet:', err);
+			console.error('[audio] Failed to start worklet host:', err);
 			speakerAudioEnabled = false;
 			stopSpeakerAudio();
 			return;
 		}
 
-		audioHighpass.connect(audioMasterGain);
-		audioMasterGain.connect(audioContext.destination);
-
-		// Tell the worker the sample rate directly — don't rely on Svelte reactivity
-		// to pick up the change inside an async function.
-		simWorker?.postMessage({ type: 'audioRate', sampleRate: audioSampleRate });
-
-		// Await resume so we know if it actually started.
 		try {
 			await audioContext.resume();
 		} catch (err) {
@@ -344,13 +332,13 @@
 	}
 
 	function stopSpeakerAudio() {
-		if (audioWorkletNode) {
-			audioWorkletNode.port.postMessage({ type: 'reset' });
-			audioWorkletNode.disconnect();
-			audioWorkletNode = null;
+		if (workletHost) {
+			workletHost.stop();
+			workletHost.dispose();
+			workletHost = null;
 		}
-		workletBufferFill = 0;
-		audioSampleRate   = null;
+		transientRunning = false;
+		workletVoltages = {};
 		audioHighpass?.disconnect();
 		audioHighpass = null;
 		audioMasterGain?.disconnect();
@@ -362,14 +350,16 @@
 	}
 
 	// ── Simulation run control ─────────────────────────────────────────────────
+	// Transient runs inside the audio worklet, so enabling/disabling it is
+	// just toggling the worklet's running flag.  No-op if audio isn't on yet.
 
 	function toggleTransientRun() {
-		if (!simWorker) return;
+		if (!workletHost) return;
 		if (transientRunning) {
-			simWorker.postMessage({ type: 'stop' });
+			workletHost.stop();
 			transientRunning = false;
 		} else {
-			simWorker.postMessage({ type: 'start' });
+			workletHost.start();
 			transientRunning = true;
 		}
 	}
@@ -475,7 +465,6 @@
 	function handleRemoveTerminalWires(terminalId: number) {
 		wiresStore.removeByTerminal(terminalId);
 	}
-
 </script>
 
 <section class="board-shell">
@@ -483,12 +472,22 @@
 		<button
 			class="run-btn"
 			class:running={transientRunning}
-			onclick={() => {
-				if (!speakerAudioEnabled && !transientRunning) {
+			onclick={async () => {
+				if (!speakerAudioEnabled) {
 					speakerAudioEnabled = true;
-					void startSpeakerAudio();
+					try {
+						await startSpeakerAudio();
+						if (workletHost) {
+							workletHost.start();
+							transientRunning = true;
+						}
+					} catch (err) {
+						console.error('[run] startSpeakerAudio threw:', err);
+						speakerAudioEnabled = false;
+					}
+				} else {
+					toggleTransientRun();
 				}
-				toggleTransientRun();
 			}}
 			disabled={netlist.elements.length === 0 || netlist.groundNodeId === null}
 		>

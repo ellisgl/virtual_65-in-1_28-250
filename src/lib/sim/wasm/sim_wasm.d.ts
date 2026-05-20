@@ -43,6 +43,18 @@ export class Simulator {
      * Pass `None`/`1` for stand-alone inductors.
      */
     add_inductor(id: string, a: number, b: number, inductance_henry: number, saturation_current_a?: number | null, coupling_group?: string | null, coupling_polarity?: number | null): void;
+    /**
+     * Add an SPDT relay.  All five terminals are topology node IDs.  The
+     * coil sits between `coil_positive` and `coil_negative`; the contact
+     * connects `common` to either `normally_closed` (rest state) or
+     * `normally_open` (energised state) with low resistance `ron_ohms`,
+     * while the inactive throw is connected with high resistance
+     * `roff_ohms`.  State transitions use coil-current hysteresis: relay
+     * activates when `|I_coil| > on_current`, releases when
+     * `|I_coil| < off_current`.  Pass `off_current < on_current` for
+     * proper Schmitt-trigger behaviour.
+     */
+    add_relay(id: string, coil_positive: number, coil_negative: number, common: number, normally_closed: number, normally_open: number, coil_resistance_ohms: number, ron_ohms: number, roff_ohms: number, on_current: number, off_current: number): void;
     add_resistor(id: string, a: number, b: number, resistance_ohms: number): void;
     add_transistor(id: string, base: number, collector: number, emitter: number, q: Transistor): void;
     add_voltage_source(id: string, positive_node: number, negative_node: number, voltage: number): void;
@@ -53,6 +65,73 @@ export class Simulator {
      * circuit).
      */
     compile(): boolean;
+    /**
+     * Snapshot of per-capacitor voltages.
+     */
+    export_cap_volts(): Float64Array;
+    /**
+     * Snapshot of Gear-2 readiness (true once a step has been committed).
+     */
+    export_gear2_ready(): boolean;
+    /**
+     * Snapshot of per-inductor branch currents.
+     */
+    export_inductor_currents(): Float64Array;
+    /**
+     * Snapshot of `node_volts` (current MNA unknowns).
+     */
+    export_node_volts(): Float64Array;
+    /**
+     * Snapshot of per-capacitor voltages from two steps ago (Gear-2).
+     */
+    export_prev_cap_volts(): Float64Array;
+    /**
+     * Snapshot of the previous step's dt (used to scale the predictor).
+     */
+    export_prev_dt(): number;
+    /**
+     * Snapshot of per-inductor currents from two steps ago (Gear-2).
+     */
+    export_prev_inductor_currents(): Float64Array;
+    /**
+     * Snapshot of `prev_node_volts` (predictor history).
+     */
+    export_prev_node_volts(): Float64Array;
+    /**
+     * Snapshot of relay active flags (`true` = energised).  Returned as
+     * `Vec<u8>` since `Vec<bool>` isn't natively exposable through
+     * wasm-bindgen; 0/1 encoding.
+     */
+    export_relay_active(): Uint8Array;
+    /**
+     * Snapshot of BJT junction-cap voltages (layout: `[Q0_Vbe, Q0_Vbc, Q1_Vbe, …]`).
+     */
+    export_tj_cap_volts(): Float64Array;
+    import_cap_volts(v: Float64Array): void;
+    import_gear2_ready(ready: boolean): void;
+    import_inductor_currents(v: Float64Array): void;
+    /**
+     * Restore `node_volts`.  Silently ignored on length mismatch.
+     */
+    import_node_volts(v: Float64Array): void;
+    import_prev_cap_volts(v: Float64Array): void;
+    import_prev_dt(dt: number): void;
+    import_prev_inductor_currents(v: Float64Array): void;
+    import_prev_node_volts(v: Float64Array): void;
+    import_relay_active(v: Uint8Array): void;
+    import_tj_cap_volts(v: Float64Array): void;
+    /**
+     * Per-inductor branch current by component id.  Returns 0.0 if the
+     * component is unknown or the simulator hasn't been compiled/stepped.
+     *
+     * Sign convention: positive current flows from terminal `a` to terminal
+     * `b` (the order passed to `add_inductor`).  For an audio speaker
+     * modelled as `Rvc + Lvc` in series, this is the actual *cone-driving*
+     * current — proportional to acoustic output force (F = B·L·I).  Often
+     * a better audio probe than the voltage across the speaker terminals,
+     * which mixes resistive drop and inductive EMF.
+     */
+    inductor_current(id: string): number;
     /**
      * Create an empty simulator with `ground_node_id` as the reference.
      */
@@ -84,6 +163,19 @@ export class Simulator {
      * (falls back to BE on the first step after compile/DC).
      */
     step_with_gear(dt: number, gear: number): StepResult;
+    /**
+     * Voltage-source branch current by component id.  Returns 0.0 if the
+     * component is unknown or the simulator hasn't been compiled/stepped.
+     *
+     * Sign convention (matches TS `sourceCurrents` exactly): the value is
+     * the MNA augmented unknown, where a positive current flows from the
+     * EXTERNAL circuit INTO the + terminal of the source — i.e. the
+     * source is in *sink* mode.  A battery driving a load is in *source*
+     * mode, so its branch current is **negative** with magnitude equal
+     * to the load current.  Callers that want a user-friendly "supply
+     * current" should negate the value at the call site.
+     */
+    voltage_source_current(id: string): number;
     /**
      * Total node count after compile (0 if not yet compiled).
      */
@@ -243,16 +335,39 @@ export interface InitOutput {
     readonly simulator_add_coupling: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly simulator_add_diode: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly simulator_add_inductor: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => void;
+    readonly simulator_add_relay: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number) => void;
     readonly simulator_add_resistor: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly simulator_add_transistor: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
     readonly simulator_add_voltage_source: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly simulator_compile: (a: number) => number;
+    readonly simulator_export_cap_volts: (a: number) => [number, number];
+    readonly simulator_export_gear2_ready: (a: number) => number;
+    readonly simulator_export_inductor_currents: (a: number) => [number, number];
+    readonly simulator_export_node_volts: (a: number) => [number, number];
+    readonly simulator_export_prev_cap_volts: (a: number) => [number, number];
+    readonly simulator_export_prev_dt: (a: number) => number;
+    readonly simulator_export_prev_inductor_currents: (a: number) => [number, number];
+    readonly simulator_export_prev_node_volts: (a: number) => [number, number];
+    readonly simulator_export_relay_active: (a: number) => [number, number];
+    readonly simulator_export_tj_cap_volts: (a: number) => [number, number];
+    readonly simulator_import_cap_volts: (a: number, b: number, c: number) => void;
+    readonly simulator_import_gear2_ready: (a: number, b: number) => void;
+    readonly simulator_import_inductor_currents: (a: number, b: number, c: number) => void;
+    readonly simulator_import_node_volts: (a: number, b: number, c: number) => void;
+    readonly simulator_import_prev_cap_volts: (a: number, b: number, c: number) => void;
+    readonly simulator_import_prev_dt: (a: number, b: number) => void;
+    readonly simulator_import_prev_inductor_currents: (a: number, b: number, c: number) => void;
+    readonly simulator_import_prev_node_volts: (a: number, b: number, c: number) => void;
+    readonly simulator_import_relay_active: (a: number, b: number, c: number) => void;
+    readonly simulator_import_tj_cap_volts: (a: number, b: number, c: number) => void;
+    readonly simulator_inductor_current: (a: number, b: number, c: number) => number;
     readonly simulator_new: (a: number) => number;
     readonly simulator_node_count: (a: number) => number;
     readonly simulator_node_voltage: (a: number, b: number) => number;
     readonly simulator_solve_dc: (a: number) => number;
     readonly simulator_step: (a: number, b: number) => number;
     readonly simulator_step_with_gear: (a: number, b: number, c: number) => number;
+    readonly simulator_voltage_source_current: (a: number, b: number, c: number) => number;
     readonly sparseSolveInPlace: (a: number, b: number, c: number, d: number, e: any, f: number, g: number) => void;
     readonly sparselupattern_n: (a: number) => number;
     readonly transistor_new: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number, s: number, t: number, u: number, v: number, w: number, x: number, y: number, z: number, a1: number, b1: number, c1: number) => number;
