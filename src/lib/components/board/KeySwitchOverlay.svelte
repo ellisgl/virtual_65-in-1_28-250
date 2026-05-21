@@ -8,7 +8,10 @@
 
 	let { pressed, hitbox, center, onPressedChange }: Props = $props();
 
-	function setPressed(next: boolean) {
+	function setPressed(next: boolean, source: string) {
+		if ((globalThis as any).__simDebug) {
+			console.log(`[KEY1] ${next ? 'PRESS' : 'RELEASE'} (source: ${source})`);
+		}
 		onPressedChange?.(next);
 	}
 </script>
@@ -20,27 +23,29 @@
 	tabindex="0"
 	aria-label={`Morse code key (${pressed ? 'pressed' : 'open'})`}
 	onpointerdown={(e) => {
-		setPressed(true);
+		setPressed(true, 'pointerdown');
 		(e.currentTarget as Element).setPointerCapture(e.pointerId);
 	}}
 	onpointerup={(e) => {
-		setPressed(false);
+		setPressed(false, 'pointerup');
 		(e.currentTarget as Element).releasePointerCapture(e.pointerId);
 	}}
 	onpointercancel={(e) => {
-		setPressed(false);
+		setPressed(false, 'pointercancel');
 		if ((e.currentTarget as Element).hasPointerCapture(e.pointerId)) {
 			(e.currentTarget as Element).releasePointerCapture(e.pointerId);
 		}
 	}}
-	onpointerleave={() => {
-		setPressed(false);
+	onpointerleave={(e) => {
+		if (!(e.currentTarget instanceof Element) || !e.currentTarget.hasPointerCapture(e.pointerId)) {
+			setPressed(false, 'pointerleave (no capture)');
+		}
 	}}
 	onkeydown={(e) => {
-		if (e.key === ' ' || e.key === 'Enter') setPressed(true);
+		if (e.key === ' ' || e.key === 'Enter') setPressed(true, `keydown:${e.key}`);
 	}}
 	onkeyup={(e) => {
-		if (e.key === ' ' || e.key === 'Enter') setPressed(false);
+		if (e.key === ' ' || e.key === 'Enter') setPressed(false, `keyup:${e.key}`);
 	}}
 >
 	<rect

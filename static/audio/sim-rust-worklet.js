@@ -283,8 +283,22 @@ class SimRustProcessor extends AudioWorkletProcessor {
     async onmessage(msg) {
         if (!msg || !msg.type) return;
 
+        // Allow the host to enable diagnostic logging inside this
+        // AudioWorkletGlobalScope (which is a separate JS realm from the
+        // main thread, so setting globalThis.__simDebug in DevTools has
+        // no effect here).
+        if (typeof msg.debug === 'boolean') globalThis.__simDebug = msg.debug;
+
         try {
             switch (msg.type) {
+                case 'init':
+                    console.log(`[${new Date().toISOString()}] [worklet] init received (running: ${this.running})`);
+                    this.wasmReady = true;
+                    // DO NOT set this.running = false here!  It races with
+                    // the host's start() call during first connect.
+                    this.port.postMessage({ type: 'ready' });
+                    break;
+
                 case 'configure':
                     this.configureCount++;
                     try {
@@ -335,6 +349,43 @@ class SimRustProcessor extends AudioWorkletProcessor {
                         this.onmessage({ type: 'configure', netlist: msg.netlist });
                         break;
                     }
+
+                    // Performance Optimization: If the number of elements hasn't
+                    // changed, attempt an incremental update via the WASM
+                    // Simulator's native update methods. This avoids the
+                    // heavy structured-clone of the state vectors and the
+                    // cost of full LU pattern re-analysis.
+                    const isIncremental = msg.netlist && msg.netlist.elements &&
+                                          msg.netlist.elements.length === (this.elementCount || 0);
+
+                    if (isIncremental) {
+                        let ok = true;
+                        for (const el of msg.netlist.elements) {
+                            if (el.type === 'resistor') {
+                                if (!this.sim.update_resistor(el.componentId, el.resistanceOhms)) {
+                                    ok = false; break;
+                                }
+                            } else if (el.type === 'voltage-source') {
+                                if (!this.sim.update_voltage_source(el.componentId, el.voltage)) {
+                                    ok = false; break;
+                                }
+                            } else {
+                                // For caps, inductors, transistors, etc., we
+                                // still need a full rebuild because their
+                                // model params are currently static in the
+                                // WASM core.
+                                ok = false; break;
+                            }
+                        }
+                        if (ok) {
+                            if (this.sim.compile()) {
+                                // Successfully updated parameters in-place!
+                                break;
+                            }
+                        }
+                    }
+
+                    // Fullback: Full rebuild with state transfer.
                     const snap = {
                         nodeVolts:            this.sim.export_node_volts(),
                         prevNodeVolts:        this.sim.export_prev_node_volts(),
@@ -353,6 +404,7 @@ class SimRustProcessor extends AudioWorkletProcessor {
                         // probably needs to re-configure entirely.
                         break;
                     }
+                    this.elementCount = msg.netlist?.elements?.length || 0;
                     newSim.import_node_volts(snap.nodeVolts);
                     newSim.import_prev_node_volts(snap.prevNodeVolts);
                     newSim.import_cap_volts(snap.capVolts);
@@ -375,12 +427,17 @@ class SimRustProcessor extends AudioWorkletProcessor {
                     this.audioProbe = msg.probe;
                     break;
 
+                case 'ping':
+                    // No-op to keep the port/event-loop active.
+                    break;
+
                 case 'start':
+                    console.log(`[${new Date().toISOString()}] [worklet] start received`);
                     // Only run if WASM mounted cleanly in the constructor.
                     if (this.wasmReady) this.running = true;
                     break;
-
                 case 'stop':
+                    console.log(`[${new Date().toISOString()}] [worklet] stop received`);
                     this.running = false;
                     break;
             }
@@ -390,35 +447,41 @@ class SimRustProcessor extends AudioWorkletProcessor {
     }
 
     cacheSpeakerProbes(netlist) {
-        // Approximation: SPK1 is two resistor segments (Rvc + Lvc midpoint).
-        // The simplest heuristic is to look at the netlist's resistor IDs and
-        // find the two SPK1 endpoints.  If the topology builder named them
-        // 'SPK1:Rvc' / 'SPK1:Lvc' (kit convention) we read the outer nodes.
-        // Failing that, the worker also exports node IDs for the T1 primary
-        // (terminal 70) and centre tap (terminal 71) via the message.
         this.speakerTopA = -1; this.speakerTopB = -1;
         this.t1PrimaryTop = -1; this.t1CenterTop = -1;
 
-        let spkRvcOuter = null, spkLvcOuter = null;
+        // The speaker is modeled as nodeA --[Rvc]-- midNode --[Lvc]-- nodeB.
+        // We want to probe [nodeA, nodeB] to get the full voltage across the coil.
+        let nodeA = -1, nodeB = -1;
         for (const el of netlist.elements) {
-            if (el.type === 'resistor' && el.componentId === 'SPK1:Rvc') {
-                spkRvcOuter = el.nodes[0];  // outer end of Rvc
-            } else if (el.type === 'inductor' && el.componentId === 'SPK1:Lvc') {
-                spkLvcOuter = el.nodes[1];  // outer end of Lvc
-            }
+            if (el.componentId === 'SPK1:Rvc') nodeA = el.nodes[0];
+            if (el.componentId === 'SPK1:Lvc') nodeB = el.nodes[1];
         }
-        if (spkRvcOuter !== null && spkLvcOuter !== null) {
-            this.speakerTopA = spkRvcOuter;
-            this.speakerTopB = spkLvcOuter;
+
+        if (nodeA !== -1 && nodeB !== -1) {
+            this.speakerTopA = nodeA;
+            this.speakerTopB = nodeB;
+            if (globalThis.__simDebug) console.log(`[worklet] Probe: found SPK1 outer nodes [${nodeA}, ${nodeB}]`);
         }
 
         // T1 primary/centre — look for the LT700 winding-resistor pattern.
         for (const el of netlist.elements) {
             if (el.type === 'resistor' && el.componentId === 'T1:Rp1') {
-                this.t1PrimaryTop = el.nodes[0];   // upstream of Rp1 = primaryStart
+                this.t1PrimaryTop = el.nodes[0];
             }
             if (el.type === 'inductor' && el.componentId === 'T1:Lp1') {
-                this.t1CenterTop = el.nodes[1];    // downstream of Lp1 = primaryCenterTap
+                this.t1CenterTop = el.nodes[1];
+            }
+        }
+
+        if (this.speakerTopA === -1 && this.t1PrimaryTop === -1) {
+            for (const el of netlist.elements) {
+                if (el.type === 'inductor' || el.type === 'transformer') {
+                    this.speakerTopA = el.nodes[0];
+                    this.speakerTopB = el.nodes[1];
+                    console.log(`[worklet] Probe fallback: using ${el.type} ${el.componentId} nodes [${el.nodes[0]}, ${el.nodes[1]}]`);
+                    break;
+                }
             }
         }
     }
@@ -452,8 +515,7 @@ class SimRustProcessor extends AudioWorkletProcessor {
                 real_sim_nan = true;
             } else {
                 v = va - vb;
-                if (Math.abs(v) > 0.001) v_ok = true;
-                // else: speaker is quiet → fall through to T1 below
+                v_ok = true;
             }
         }
         if (!v_ok && !real_sim_nan && (this.t1PrimaryTop >= 0 || this.t1CenterTop >= 0)) {
@@ -495,29 +557,46 @@ class SimRustProcessor extends AudioWorkletProcessor {
 
     process(_inputs, outputs, _params) {
         try {
-            if (this._debugCount === undefined) this._debugCount = 0;
-            if (this._debugCount % 375 === 0) {
-                // Heartbeat to host every ~375 quanta (~1s at 48kHz/128)
-                this.post({
-                    type: 'debug',
-                    state: {
-                        running: this.running,
-                        hasSim: !!this.sim,
-                        wasmReady: this.wasmReady,
-                        bootTonePos: this.bootTonePos,
-                        speakerA: this.speakerTopA,
-                        speakerB: this.speakerTopB,
-                        t1P: this.t1PrimaryTop,
-                        t1C: this.t1CenterTop,
-                        audioProbe: this.audioProbe,
-                        configureCount: this.configureCount,
-                        lastConfigureStatus: this.lastConfigureStatus,
-                        lastError: this.lastError,
-                        elementCount: this.elementCount
-                    }
-                });
+            // One-shot "process() is alive" beacon. Posted on the very
+            // first quantum regardless of __simDebug so we can always
+            // confirm from the host whether the audio thread is being
+            // scheduled (vs. silently never running, which is hard to
+            // distinguish from "simulator produces zero output").
+            if (!this._postedAliveBeacon) {
+                this._postedAliveBeacon = true;
+                this.post({ type: 'alive', running: this.running, hasSim: !!this.sim, wasmReady: this.wasmReady });
             }
-            this._debugCount++;
+            // Heartbeat is disabled by default. DevTools-attached
+            // renderers stall the AudioWorklet when the main thread
+            // performs console formatting on each postMessage — the
+            // exact symptom is "audio cuts out ~500 ms after start
+            // when DevTools is open, but works fine when it's closed".
+            // Set globalThis.__simDebug = true from the host before
+            // calling start() if you need the heartbeat back.
+            if (globalThis.__simDebug) {
+                if (this._debugCount === undefined) this._debugCount = 0;
+                if (this._debugCount % 375 === 0) {
+                    this.post({
+                        type: 'debug',
+                        state: {
+                            running: this.running,
+                            hasSim: !!this.sim,
+                            wasmReady: this.wasmReady,
+                            bootTonePos: this.bootTonePos,
+                            speakerA: this.speakerTopA,
+                            speakerB: this.speakerTopB,
+                            t1P: this.t1PrimaryTop,
+                            t1C: this.t1CenterTop,
+                            audioProbe: this.audioProbe,
+                            configureCount: this.configureCount,
+                            lastConfigureStatus: this.lastConfigureStatus,
+                            lastError: this.lastError,
+                            elementCount: this.elementCount
+                        }
+                    });
+                }
+                this._debugCount++;
+            }
 
             return this._processBody(_inputs, outputs, _params);
         } catch (err) {
@@ -548,6 +627,25 @@ class SimRustProcessor extends AudioWorkletProcessor {
     }
 
     _processBody(_inputs, outputs, _params) {
+        if (globalThis.__simDebug) {
+            this._processCount = (this._processCount || 0) + 1;
+            if (this._processCount % 100 === 0) console.log('[worklet] process() call', this._processCount, 'running:', this.running);
+        }
+        if (globalThis.__simDebug && this.running && this.sim && this.wasmReady) {
+            this._debugLastRun = true;
+        } else if (globalThis.__simDebug && this._debugLastRun) {
+            this._debugLastRun = false;
+            console.log('[worklet debug]:', {
+                running: this.running,
+                hasSim: !!this.sim,
+                wasmReady: this.wasmReady,
+                bootTonePos: this.bootTonePos,
+                speakerA: this.speakerTopA,
+                speakerB: this.speakerTopB,
+                adaptiveDt: this.adaptiveDt,
+                audioPhase: this.audioPhase
+            });
+        }
         const out = outputs[0];
         if (!out || out.length === 0) return true;
         const ch0 = out[0];
@@ -572,15 +670,33 @@ class SimRustProcessor extends AudioWorkletProcessor {
         // subsequent quanta run normal sim audio.
         if (this.bootTonePos < this.bootToneSamples) {
             const omega = 2 * Math.PI * this.bootToneFreq / sampleRate;
-            for (let i = 0; i < frames; i++) {
-                const s = (this.bootTonePos < this.bootToneSamples)
-                    ? 0.3 * Math.sin(omega * this.bootTonePos)
-                    : 0;
+            let i = 0;
+            for (; i < frames && this.bootTonePos < this.bootToneSamples; i++) {
+                const s = 0.3 * Math.sin(omega * this.bootTonePos);
                 ch0[i] = s;
                 for (let c = 1; c < out.length; c++) out[c][i] = s;
                 this.bootTonePos++;
             }
-            return true;
+            if (this.bootTonePos >= this.bootToneSamples) {
+                console.log(`[${new Date().toISOString()}] [worklet] boot tone finished`);
+                // Clear state carryover so simulation starts at t=0
+                this.audioPhase = 0;
+                this.prevV = 0;
+                this.dcPrevOut = 0;
+                this.dcPrevIn = 0;
+                this.didFirstQuantumReport = false;
+                
+                // If there are remaining frames in this quantum, we MUST
+                // continue to the simulation logic instead of returning.
+                if (i < frames) {
+                    console.log(`[worklet] transitioning to sim in-quantum at frame ${i}`);
+                    frame = i;
+                } else {
+                    return true;
+                }
+            } else {
+                return true;
+            }
         }
 
         // One-shot diagnostic + periodic counters.
@@ -596,24 +712,32 @@ class SimRustProcessor extends AudioWorkletProcessor {
             this.activeFramesSinceLog = 0;
             this.tickEdgesSinceLog = 0;
             this.lastWasActive = false;
-            console.log('[worklet] first quantum:',
-                'speakerTopA=', this.speakerTopA,
-                'speakerTopB=', this.speakerTopB,
-                'audioProbe=', this.audioProbe,
-            );
+            if (globalThis.__simDebug) {
+                console.log('[worklet] first quantum:',
+                    'speakerTopA=', this.speakerTopA,
+                    'speakerTopB=', this.speakerTopB,
+                    'audioProbe=', this.audioProbe,
+                );
+            }
         }
         this.framesSinceLog += frames;
+        if (globalThis.__simDebug && this.framesSinceLog % 100 === 0) {
+            console.log('[worklet debug] accumulation:', this.framesSinceLog);
+        }
         if (this.framesSinceLog >= sampleRate) {
             const spkPp = this.spkMaxSinceLog - this.spkMinSinceLog;
             const outPp = this.outMaxSinceLog - this.outMinSinceLog;
             const activePct = (this.activeFramesSinceLog / this.framesSinceLog) * 100;
             const tickHz = this.tickEdgesSinceLog * sampleRate / this.framesSinceLog;
-            if (Number.isFinite(spkPp) || Number.isFinite(outPp) || activePct > 0) {
+            if (globalThis.__simDebug) {
                 const simNan = this.simNanCount || 0;
+                const vA = this.speakerTopA >= 0 ? this.sim.node_voltage(this.speakerTopA) : 0;
+                const vB = this.speakerTopB >= 0 ? this.sim.node_voltage(this.speakerTopB) : 0;
                 console.log(
                     `[worklet] last 1s: ` +
                     `active=${activePct.toFixed(1)}% events=${this.tickEdgesSinceLog} (≈${tickHz.toFixed(1)}Hz) ` +
                     `simNaN=${simNan} ` +
+                    `vA=${vA.toFixed(3)} vB=${vB.toFixed(3)} ` +
                     `spk[${this.spkMinSinceLog.toFixed(2)}..${this.spkMaxSinceLog.toFixed(2)}]=${spkPp.toFixed(2)} ` +
                     `out[${this.outMinSinceLog.toFixed(3)}..${this.outMaxSinceLog.toFixed(3)}]=${outPp.toFixed(3)} ` +
                     `dcPrevOut=${this.dcPrevOut.toFixed(3)}`
@@ -639,6 +763,12 @@ class SimRustProcessor extends AudioWorkletProcessor {
 
         // Cache bandpass state in registers.
         const emit = (rawSpkV) => {
+            // Check for NaN and count it — helps diagnose solver explosions.
+            if (Number.isNaN(rawSpkV)) {
+                this.simNanCount = (this.simNanCount || 0) + 1;
+                rawSpkV = 0;
+            }
+
             // Track speaker-V swing for the periodic log.
             if (rawSpkV < this.spkMinSinceLog) this.spkMinSinceLog = rawSpkV;
             if (rawSpkV > this.spkMaxSinceLog) this.spkMaxSinceLog = rawSpkV;
@@ -681,7 +811,6 @@ class SimRustProcessor extends AudioWorkletProcessor {
         };
 
         while (frame < frames) {
-
             // Emit any audio samples that fall at or before current sim time.
             if (nextT <= simT + 1e-14) {
                 emit(prevV);
@@ -695,22 +824,49 @@ class SimRustProcessor extends AudioWorkletProcessor {
             // point (transistor at the edge of saturation, relay mid-flap,
             // etc).  The state is preserved on failure — but if we retry
             // from the same state with the same dt, we hit the same
-            // singularity forever.  Recovery: solve_dc() finds a fresh
-            // valid operating point AND clears gear2_ready inside the sim,
-            // so the next step_with_gear(dt, 2) uses BE for one step
-            // (BE is more numerically robust at the cost of order).  We
-            // lose the brief transient region we were in (audio may have a
-            // tiny glitch) but the worklet keeps producing sound.
-            const stepDt = Math.max(DT_MIN, Math.min(this.adaptiveDt, nextT - simT));
-            const r = this.sim.step_with_gear(stepDt, 2);
-            const stepOk = r.ok;
-            r.free();
+            // singularity forever.
+            let stepDt = Math.max(DT_MIN, Math.min(this.adaptiveDt, nextT - simT));
+            // Use the packed-u32 variant of step_with_gear in the audio
+            // hot path.  The standard StepResult return crosses the JS↔
+            // WASM boundary 5+ times per call (struct alloc + getters +
+            // .free()) — at 128+ calls per quantum that's enough overhead
+            // to push process() over budget on stiff circuits like the
+            // metronome.  Packed u32 = one wasm crossing per step, no
+            // alloc, no free.  Encoding: bit 0 = ok, bits 1-7 = issue,
+            // bits 8-31 = iters.
+            let r = this.sim.step_with_gear_packed(stepDt, 2);
+            let stepOk = (r & 1) !== 0;
+            let iters  = r >>> 8;
+
             if (!stepOk) {
-                try { this.sim.solve_dc(); } catch (_e) { /* very stuck */ }
+                // Adaptive recovery: if a step fails at current dt, try
+                // a much smaller step (DT_MIN) with BE.
+                this.adaptiveDt = DT_MIN;
+                const r2 = this.sim.step_with_gear_packed(DT_MIN, 1);
+                if ((r2 & 1) !== 0) {
+                    stepOk = true;
+                    stepDt = DT_MIN;
+                    iters  = r2 >>> 8;
+                } else {
+                    // Total failure: solve DC to jump to a valid state.
+                    try { this.sim.solve_dc(); } catch (_e) { /* very stuck */ }
+                }
+            }
+
+            if (!stepOk) {
                 if (this.failuresSinceLog !== undefined) this.failuresSinceLog++;
                 emit(prevV);
                 nextT += period;
                 continue;
+            }
+
+            // Adaptive step size: if Newton converged very quickly, we can
+            // likely take larger steps. If it took many iterations, shrink.
+            // Standard SPICE-like logic:
+            if (iters <= 3) {
+                this.adaptiveDt = Math.min(DT_MAX, this.adaptiveDt * 1.2);
+            } else if (iters >= 6) {
+                this.adaptiveDt = Math.max(DT_MIN, this.adaptiveDt * 0.5);
             }
 
             const newV = this.speakerV();
@@ -730,22 +886,26 @@ class SimRustProcessor extends AudioWorkletProcessor {
         this.prevV = prevV;
         this.audioPhase = nextT - simT;
 
-        // Per-quantum output amplitude diagnostic (every ~1s)
-        if (this._outDiagCount === undefined) { this._outDiagCount = 0; this._outDiagMax = 0; this._outDiagNonZero = 0; this._outDiagTotal = 0; }
-        let qMax = 0;
-        let qNonZero = 0;
-        for (let i = 0; i < frames; i++) {
-            const abs = Math.abs(ch0[i]);
-            if (abs > qMax) qMax = abs;
-            if (abs > 1e-6) qNonZero++;
-        }
-        if (qMax > this._outDiagMax) this._outDiagMax = qMax;
-        this._outDiagNonZero += qNonZero;
-        this._outDiagTotal += frames;
-        this._outDiagCount++;
-        if (this._outDiagCount >= 375) {
-            console.log(`[worklet] output 1s: maxAmp=${this._outDiagMax.toFixed(4)} nonZero=${this._outDiagNonZero}/${this._outDiagTotal} (${(100*this._outDiagNonZero/this._outDiagTotal).toFixed(1)}%)`);
-            this._outDiagCount = 0; this._outDiagMax = 0; this._outDiagNonZero = 0; this._outDiagTotal = 0;
+        // Per-quantum output amplitude diagnostic (every ~1s) — debug only.
+        // Even the tight scan loop adds measurable cost on every quantum;
+        // gate behind globalThis.__simDebug.
+        if (globalThis.__simDebug) {
+            if (this._outDiagCount === undefined) { this._outDiagCount = 0; this._outDiagMax = 0; this._outDiagNonZero = 0; this._outDiagTotal = 0; }
+            let qMax = 0;
+            let qNonZero = 0;
+            for (let i = 0; i < frames; i++) {
+                const abs = Math.abs(ch0[i]);
+                if (abs > qMax) qMax = abs;
+                if (abs > 1e-6) qNonZero++;
+            }
+            if (qMax > this._outDiagMax) this._outDiagMax = qMax;
+            this._outDiagNonZero += qNonZero;
+            this._outDiagTotal += frames;
+            this._outDiagCount++;
+            if (this._outDiagCount >= 375) {
+                console.log(`[worklet] output 1s: maxAmp=${this._outDiagMax.toFixed(4)} nonZero=${this._outDiagNonZero}/${this._outDiagTotal} (${(100*this._outDiagNonZero/this._outDiagTotal).toFixed(1)}%)`);
+                this._outDiagCount = 0; this._outDiagMax = 0; this._outDiagNonZero = 0; this._outDiagTotal = 0;
+            }
         }
 
         // Snapshot for UI.  Iterate the known node-ID set captured at
