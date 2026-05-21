@@ -323,7 +323,7 @@ export function buildSimulationNetlist(
 				unsupported.push({
 					componentId: component.id,
 					kind: component.kind,
-					reason: 'Transistor terminals are missing topology node bindings'
+					reason: `Transistor terminals (B:${base}, C:${collector}, E:${emitter}) are missing topology node bindings`
 				});
 				continue;
 			}

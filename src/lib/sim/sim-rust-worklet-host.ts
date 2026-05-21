@@ -70,6 +70,7 @@ export class SimRustWorkletHost {
     private isAlreadyReady = false;
     private readyPromise: Promise<void> | null = null;
     private resolveReady: (() => void) | null = null;
+    private lastNetlistJson: string | null = null;
 
     onSnapshot: ((volts: NodeVoltages) => void) | null = null;
     onError:    ((msg: string) => void) | null = null;
@@ -137,7 +138,7 @@ export class SimRustWorkletHost {
         const blockTrigger = this.waitForReady();
 
         console.log('MAIN THREAD: Posting init configuration to worklet...');
-        this.node.port.postMessage({ type: 'init', wasmModule });
+        this.node.port.postMessage({ type: 'init', wasmModule, debug: !!(globalThis as any).__simDebug });
 
         // 🚀 FIX: Await the explicit variable context, ensuring it halts execution here
         console.log('MAIN THREAD: Halting until worklet is verified ready...');
@@ -158,23 +159,39 @@ export class SimRustWorkletHost {
 
         this.wires = wires;
         const netlist = this.buildNetlist(wires, controls);
-        const wasmModule = await loadWasmModule();
-        console.log('[host] posting configure to worklet, elements:', netlist.elements.length);
-        this.node.port.postMessage({ type: 'configure', netlist, wasmModule, audioProbe });
+        this.lastNetlistJson = JSON.stringify(netlist);
+        this.node.port.postMessage({ type: 'configure', netlist, audioProbe, debug: !!(globalThis as any).__simDebug });
     }
 
     updateControls(controls: ControlState): void {
         if (!this.node || !this.wires.length) return;
+
+        // Dedup: avoid posting if netlist is identical (e.g. redundant
+        // effect triggers).
         const netlist = this.buildNetlist(this.wires, controls);
+        const netlistJson = JSON.stringify(netlist);
+        if (netlistJson === this.lastNetlistJson) return;
+        this.lastNetlistJson = netlistJson;
+
         this.node.port.postMessage({ type: 'updateControls', netlist });
+    }
+
+    ping(): void {
+        this.node?.port.postMessage({ type: 'ping' });
     }
 
     setAudioProbe(probe: AudioProbe): void {
         this.node?.port.postMessage({ type: 'audioProbe', probe });
     }
 
-    start(): void { this.node?.port.postMessage({ type: 'start' }); }
-    stop():  void { this.node?.port.postMessage({ type: 'stop'  }); }
+    start(): void {
+        if ((globalThis as any).__simDebug) console.trace('[host] start() called');
+        this.node?.port.postMessage({ type: 'start', debug: !!(globalThis as any).__simDebug });
+    }
+    stop():  void {
+        if ((globalThis as any).__simDebug) console.trace('[host] stop() called');
+        this.node?.port.postMessage({ type: 'stop'  });
+    }
 
     dispose(): void {
         if (this.node) {
@@ -204,7 +221,10 @@ export class SimRustWorkletHost {
                 this.onSnapshot?.(msg.nodeVoltages ?? {});
                 break;
             case 'debug':
-                console.log('[worklet debug]:', msg.state);
+                if ((globalThis as any).__simDebug) console.log('[worklet debug]:', msg.state);
+                break;
+            case 'alive':
+                console.log('[worklet alive] first process() call:', (msg as any));
                 break;
             case 'error':
                 console.error('[sim-rust-worklet] error:', msg.error);

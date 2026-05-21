@@ -61,6 +61,8 @@
 
 	// ── Controls helper ────────────────────────────────────────────────────────
 	function currentControls(): ControlState {
+		// Use snapshotted values of $state to ensure the $derived
+		// and $effects see a consistent view.
 		return {
 			valueOverrides:    VARIABLE_CAPACITOR_COMPONENT ? { VC1: variableCapacitance } : {},
 			positionOverrides: VARIABLE_RESISTOR_COMPONENT  ? { VR1: variableResistancePosition } : {},
@@ -70,11 +72,7 @@
 
 	// ── Netlist (main thread, for button enable + lamp resistance display) ─────
 	let netlist = $derived(
-		buildSimulationNetlist(topology, KIT_COMPONENTS, {
-			valueOverrides: VARIABLE_CAPACITOR_COMPONENT ? { VC1: variableCapacitance } : {},
-			positionOverrides: VARIABLE_RESISTOR_COMPONENT ? { VR1: variableResistancePosition } : {},
-			switchStates
-		})
+		buildSimulationNetlist(topology, KIT_COMPONENTS, currentControls())
 	);
 
 	// ── DC snapshot via Rust WASM ──────────────────────────────────────────────
@@ -111,6 +109,7 @@
 	// simulator directly: process() steps the sim and emits audio samples in
 	// one shot.  Snapshots come back over the port for UI updates.
 	let workletHost = $state<SimRustWorkletHost | null>(null);
+	let lastHandledResetKey = $state<string | null>(null);
 	let workletVoltages = $state<Record<number, number>>({});
 	let transientRunning = $state(false);
 
@@ -119,6 +118,8 @@
 	let audioContext: AudioContext | null = null;
 	let audioMasterGain: GainNode | null = null;
 	let audioHighpass: BiquadFilterNode | null = null;
+	let audioKeepAliveRunning = false;
+	let audioKeepAliveRafId: number | null = null;
 
 	// ── Display ────────────────────────────────────────────────────────────────
 	// activeNodeVoltages reflects the "current" voltage at each node.  When
@@ -234,16 +235,17 @@
 
 	// Wire topology change → full worklet reset (rebuild from new wires).
 	$effect(() => {
-		transientResetKey;
 		const host = workletHost;
-		if (!host) return;
+		const currentResetKey = transientResetKey;
+		if (!host || !host.isReady()) return;
 
 		untrack(() => {
-			// Skip during initial boot — connect() awaits readyPromise, so
-			// the host can briefly exist before its worklet thread has
-			// mounted WASM.  Sending configure too early would race the
-			// constructor.
-			if (!host.isReady()) return;
+			if (currentResetKey === lastHandledResetKey) return;
+			console.log(`[${new Date().toISOString()}] [Board] transientResetKey changed, resetting worklet`, {
+				from: lastHandledResetKey,
+				to: currentResetKey
+			});
+			lastHandledResetKey = currentResetKey;
 
 			const wasRunning = transientRunning;
 			host.stop();
@@ -266,13 +268,11 @@
 
 	// Controls changed → soft recompile (state-preserving in the worklet).
 	$effect(() => {
-		variableResistancePosition;
-		variableCapacitance;
-		switchStates;
+		const controls = currentControls();
 		const host = workletHost;
 		// Same boot-race guard as the wire-change effect above.
 		if (!host || !host.isReady()) return;
-		untrack(() => host.updateControls(currentControls()));
+		untrack(() => host.updateControls(controls));
 	});
 
 	onDestroy(() => {
@@ -295,7 +295,7 @@
 		// 1 kHz against the 250 Hz-centred cone bandpass).  Stacking
 		// another -12 dB makes the siren barely audible.  tanh saturation
 		// prevents clipping so we don't need master-side headroom.
-		audioMasterGain.gain.value = 1.0;
+		audioMasterGain.gain.value = 4.0;
 		audioHighpass  = audioContext.createBiquadFilter();
 		audioHighpass.type = 'highpass';
 		audioHighpass.frequency.value = 25;
@@ -306,7 +306,14 @@
 		try {
 			const host = new SimRustWorkletHost(audioContext);
 			host.onSnapshot = (volts) => { workletVoltages = volts; };
-			host.onError    = (msg)   => { console.error('[worklet] sim failure:', msg); };
+			host.onError    = (msg)   => {
+				console.error('[worklet] sim failure:', msg);
+				if (msg.includes('topology node bindings')) {
+					// Surface component binding errors to the UI if possible.
+					// For now just log more visibly.
+					console.warn('[worklet] Check component connections!');
+				}
+			};
 			await host.connect(audioHighpass);
 
 			// Initial configure with current wires + controls.  The worklet
@@ -316,6 +323,7 @@
 				toTerminal:   w.toTerminal
 			}));
 			await host.configure(wires, currentControls());
+			lastHandledResetKey = transientResetKey;
 			workletHost = host;
 		} catch (err) {
 			console.error('[audio] Failed to start worklet host:', err);
@@ -329,9 +337,51 @@
 		} catch (err) {
 			console.error('[audio] AudioContext.resume() failed:', err);
 		}
+
+
+		// Chrome throttles AudioWorklet processing when the page is
+		// considered "idle" (no main-thread activity, tab backgrounded,
+		// or no rAF callbacks queued).  The symptom is audio cutting
+		// out after ~500 ms even though the worklet is producing
+		// samples — only re-enabling when DevTools performance
+		// recording forces the tab to stay active.  Two-pronged fix:
+		//   1. Keep the main thread "busy" with a perpetual rAF.
+		//   2. If the AudioContext slips into 'suspended' for any
+		//      reason (autoplay policy, OS audio device change, etc.),
+		//      resume it automatically.
+		audioKeepAliveRunning = true;
+		const tick = () => {
+			if (!audioKeepAliveRunning) return;
+			if (audioContext && audioContext.state === 'suspended') {
+				void audioContext.resume().catch(() => {});
+			}
+			// Periodic ping to keep the worklet's event loop and the
+			// main thread's rAF active even when Chrome throttles.
+			workletHost?.ping();
+			audioKeepAliveRafId = requestAnimationFrame(tick);
+		};
+		audioKeepAliveRafId = requestAnimationFrame(tick);
+
+		// Also re-resume on visibility change — Chrome aggressively
+		// suspends audio when the tab loses focus.
+		document.addEventListener('visibilitychange', onVisibilityChange);
+	}
+
+	function onVisibilityChange() {
+		if (document.visibilityState === 'visible' && audioContext && audioContext.state === 'suspended') {
+			void audioContext.resume().catch(() => {});
+		}
 	}
 
 	function stopSpeakerAudio() {
+		audioKeepAliveRunning = false;
+		if (audioKeepAliveRafId !== null) {
+			cancelAnimationFrame(audioKeepAliveRafId);
+			audioKeepAliveRafId = null;
+		}
+		if (typeof document !== 'undefined') {
+			document.removeEventListener('visibilitychange', onVisibilityChange);
+		}
 		if (workletHost) {
 			workletHost.stop();
 			workletHost.dispose();
@@ -355,6 +405,7 @@
 
 	function toggleTransientRun() {
 		if (!workletHost) return;
+		console.log(`[${new Date().toISOString()}] [Board] toggleTransientRun`, { from: transientRunning });
 		if (transientRunning) {
 			workletHost.stop();
 			transientRunning = false;
@@ -465,6 +516,7 @@
 	function handleRemoveTerminalWires(terminalId: number) {
 		wiresStore.removeByTerminal(terminalId);
 	}
+	let processingRunClick = false;
 </script>
 
 <section class="board-shell">
@@ -472,21 +524,31 @@
 		<button
 			class="run-btn"
 			class:running={transientRunning}
-			onclick={async () => {
-				if (!speakerAudioEnabled) {
-					speakerAudioEnabled = true;
-					try {
-						await startSpeakerAudio();
-						if (workletHost) {
-							workletHost.start();
-							transientRunning = true;
+			onclick={async (e) => {
+				e.preventDefault();
+				e.stopPropagation();
+				if (processingRunClick) return;
+				processingRunClick = true;
+				try {
+					console.log(`[${new Date().toISOString()}] [Board] Run button clicked`, { speakerAudioEnabled, transientRunning });
+					if (!speakerAudioEnabled) {
+						speakerAudioEnabled = true;
+						try {
+							await startSpeakerAudio();
+							if (workletHost) {
+								workletHost.start();
+								transientRunning = true;
+							}
+						} catch (err) {
+							console.error('[run] startSpeakerAudio threw:', err);
+							speakerAudioEnabled = false;
 						}
-					} catch (err) {
-						console.error('[run] startSpeakerAudio threw:', err);
-						speakerAudioEnabled = false;
+					} else {
+						toggleTransientRun();
 					}
-				} else {
-					toggleTransientRun();
+				} finally {
+					// Small debounce to prevent double-clicks from rapid firing
+					setTimeout(() => { processingRunClick = false; }, 100);
 				}
 			}}
 			disabled={netlist.elements.length === 0 || netlist.groundNodeId === null}
