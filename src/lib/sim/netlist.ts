@@ -438,7 +438,7 @@ export function buildSimulationNetlist(
 			const rsOhm = asNumber(component.metadata?.rsOhm);
 			const lp1H = asNumber(component.metadata?.lp1H) ?? 0.4;
 			const lsH = asNumber(component.metadata?.lsH) ?? 0.004;
-			const k = asNumber(component.metadata?.couplingDatasheet) ?? 0.999;
+			const k = asNumber(component.metadata?.coupling) ?? 0.999;
 
 			if (primaryStart===null || primaryCenterTap===null || primaryEnd===null ||
 				secondaryStart===null || secondaryEnd===null ||

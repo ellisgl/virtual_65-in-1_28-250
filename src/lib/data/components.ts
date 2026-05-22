@@ -309,7 +309,7 @@ const magneticParts: KitComponent[] = [
 			rp1Ohm: 45,
 			rp2Ohm: 45,
 			rsOhm: 0.4,
-			couplingDatasheet: 0.995,
+			coupling: 0.995,
 			// Compatibility aliases for existing transformer consumers.
 			ratioParameter: 0.05,
 			turnsRatioApprox: 20
