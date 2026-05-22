@@ -362,10 +362,11 @@ const controlsAndSources: KitComponent[] = [
 	{
 		// CdS photoresistor.  Resistance varies between `value` (dark) and
 		// `metadata.lightResistance` (bright) according to the user-set
-		// light-level position (0 = dark, 1 = bright).  Mapped via log-
-		// linear interpolation, which matches real CdS cells' decade-per-
-		// log-lux response.  Range is intentionally wide — 100 Ω at full
-		// daylight to 5 MΩ in dark — to cover the kit's intended use
+		// light-level position (0 = dark, 1 = bright).  Mapped via
+		// log-linear interpolation, which matches real CdS cells'
+		// decade-per-log-lux response.
+		// Range is intentionally wide — 100 Ω in full daylight to
+		// 5 MΩ in dark — to cover the kit's intended use
 		// in light-controlled trigger circuits.
 		id: 'LDR1',
 		kind: 'cds',
