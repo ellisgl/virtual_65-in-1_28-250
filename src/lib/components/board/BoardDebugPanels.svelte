@@ -12,6 +12,9 @@
 		variableResistancePosition: number;
 		hasVariableCapacitor: boolean;
 		hasVariableResistor: boolean;
+		lightLevel: number;
+		hasPhotoresistor: boolean;
+		onLightLevelChange: (value: number) => void;
 		lampPowerWatts: number;
 		lampPowerRatio: number;
 		lampGlowOpacity: number;
@@ -28,6 +31,9 @@
 		variableResistancePosition,
 		hasVariableCapacitor,
 		hasVariableResistor,
+		lightLevel,
+		hasPhotoresistor,
+		onLightLevelChange,
 		lampPowerWatts,
 		lampPowerRatio,
 		lampGlowOpacity,
@@ -140,6 +146,22 @@
 		{#if hasVariableResistor}
 			<p class="node-line">VR1 setting: {formatPotPosition(variableResistancePosition)}</p>
 		{/if}
+		{#if hasPhotoresistor}
+			<p class="node-line ldr-row">
+				<label class="ldr-label">
+					LDR1 light:
+					<input
+						type="range"
+						min="0"
+						max="1"
+						step="0.01"
+						value={lightLevel}
+						oninput={(e) => onLightLevelChange(Number((e.currentTarget as HTMLInputElement).value))}
+					/>
+					<span class="ldr-value">{(lightLevel * 100).toFixed(0)}%</span>
+				</label>
+			</p>
+		{/if}
 		<p class="node-line">
 			Lamp power: {lampPowerWatts.toFixed(4)} W ({(lampPowerRatio * 100).toFixed(1)}% nominal), opacity {lampGlowOpacity.toFixed(2)}
 		</p>
@@ -176,6 +198,26 @@
 		margin: 0;
 		font-size: 0.82rem;
 		color: #cfcfcf;
+	}
+
+	.ldr-row {
+		display: flex;
+		align-items: center;
+	}
+	.ldr-label {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.5rem;
+		cursor: pointer;
+	}
+	.ldr-label input[type='range'] {
+		flex: 1;
+		max-width: 200px;
+	}
+	.ldr-value {
+		min-width: 3em;
+		font-family: monospace;
+		color: #ffd966;
 	}
 
 	.connected {

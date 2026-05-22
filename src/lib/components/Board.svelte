@@ -23,6 +23,7 @@
 	const VARIABLE_RESISTOR_COMPONENT = KIT_COMPONENTS.find((component) => component.id === 'VR1');
 	const VARIABLE_CAPACITOR_COMPONENT = KIT_COMPONENTS.find((component) => component.id === 'VC1');
 	const KEY_COMPONENT = KIT_COMPONENTS.find((component) => component.id === 'KEY1');
+	const PHOTORESISTOR_COMPONENT = KIT_COMPONENTS.find((component) => component.id === 'LDR1');
 	const VOLTMETER_COMPONENT = KIT_COMPONENTS.find((component) => component.id === 'VM1');
 	const BOARD_VIEWBOX_WIDTH = 437;
 	const BOARD_VIEWBOX_HEIGHT = 267;
@@ -39,6 +40,7 @@
 	const variableCapDefault = Number(
 		VARIABLE_CAPACITOR_COMPONENT?.metadata?.default ?? VARIABLE_CAPACITOR_COMPONENT?.value ?? variableCapMax
 	);
+	const lightLevelDefault = Number(PHOTORESISTOR_COMPONENT?.metadata?.defaultPosition ?? 0.5);
 	const VARIABLE_RES_KNOB_X = 37;
 	const VARIABLE_RES_KNOB_Y = 190;
 	const VARIABLE_RES_KNOB_RADIUS = 9.5;
@@ -57,15 +59,19 @@
 	let topology = $derived(wiresStore.topology);
 	let variableResistancePosition = $state(variableResDefaultPosition);
 	let variableCapacitance = $state(variableCapDefault);
+	let lightLevel = $state(lightLevelDefault);
 	let switchStates = $state<Record<string, boolean>>({});
 
 	// ── Controls helper ────────────────────────────────────────────────────────
 	function currentControls(): ControlState {
 		// Use snapshotted values of $state to ensure the $derived
 		// and $effects see a consistent view.
+		const positionOverrides: Record<string, number> = {};
+		if (VARIABLE_RESISTOR_COMPONENT) positionOverrides.VR1  = variableResistancePosition;
+		if (PHOTORESISTOR_COMPONENT)     positionOverrides.LDR1 = lightLevel;
 		return {
 			valueOverrides:    VARIABLE_CAPACITOR_COMPONENT ? { VC1: variableCapacitance } : {},
-			positionOverrides: VARIABLE_RESISTOR_COMPONENT  ? { VR1: variableResistancePosition } : {},
+			positionOverrides,
 			switchStates:      { ...switchStates }
 		};
 	}
@@ -295,7 +301,7 @@
 		// 1 kHz against the 250 Hz-centred cone bandpass).  Stacking
 		// another -12 dB makes the siren barely audible.  tanh saturation
 		// prevents clipping so we don't need master-side headroom.
-		audioMasterGain.gain.value = 1.0;
+		audioMasterGain.gain.value = 4.0;
 		audioHighpass  = audioContext.createBiquadFilter();
 		audioHighpass.type = 'highpass';
 		audioHighpass.frequency.value = 25;
@@ -565,6 +571,22 @@
 		<button class="clear-btn" onclick={() => wiresStore.clearAll()} disabled={wiresStore.wires.length === 0}>
 			Clear all wires
 		</button>
+
+		{#if PHOTORESISTOR_COMPONENT}
+			<label class="ldr-control" title="LDR1 (CdS photoresistor) light level — 0% dark, 100% bright">
+				<span class="ldr-label-text">LDR1 light</span>
+				<input
+					class="ldr-slider"
+					type="range"
+					min="0"
+					max="1"
+					step="0.01"
+					value={lightLevel}
+					oninput={(e) => (lightLevel = Number((e.currentTarget as HTMLInputElement).value))}
+				/>
+				<span class="ldr-value">{(lightLevel * 100).toFixed(0)}%</span>
+			</label>
+		{/if}
 	</div>
 
 	<div class="board-container">
@@ -726,6 +748,33 @@
 	.clear-btn:disabled {
 		opacity: 0.35;
 		cursor: default;
+	}
+
+	.ldr-control {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.5rem;
+		margin-left: 0.5rem;
+		padding: 0.2rem 0.6rem;
+		border: 1px solid #555;
+		border-radius: 4px;
+		background: #1f1f1f;
+		color: #eee;
+		font-size: 0.85rem;
+		cursor: pointer;
+	}
+	.ldr-label-text {
+		user-select: none;
+	}
+	.ldr-slider {
+		width: 110px;
+		cursor: pointer;
+	}
+	.ldr-value {
+		min-width: 3em;
+		text-align: right;
+		font-family: monospace;
+		color: #ffd966;
 	}
 
 	.board-container {

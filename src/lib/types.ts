@@ -15,6 +15,7 @@ export type ComponentKind =
 	| 'relay'
 	| 'antenna'
 	| 'switch'
+	| 'cds'
 	| 'voltmeter';
 
 export type DeviceModelType = 'diode' | 'bjt' | 'scr' | 'relay' | 'lamp';

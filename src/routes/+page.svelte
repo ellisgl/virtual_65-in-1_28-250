@@ -3,7 +3,6 @@
 </script>
 
 <main>
-	<h1>Virtual Science Fair 65-in-1</h1>
 	<Board />
 </main>
 

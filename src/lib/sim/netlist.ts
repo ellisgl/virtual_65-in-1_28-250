@@ -160,6 +160,67 @@ export function buildSimulationNetlist(
 			continue;
 		}
 
+		if (component.kind === 'cds') {
+			// CdS photoresistor.  Two-terminal element whose resistance is
+			// set by the user-controlled light level (0 = dark → R = value,
+			// 1 = bright → R = metadata.lightResistance).  Log-linear
+			// interpolation matches the decade-per-log-lux response of a
+			// real CdS cell — at position 0.5 you get the geometric mean
+			// of dark and light, not the arithmetic mean, which would be
+			// dominated by the (much larger) dark value.
+			const darkOhms   = asNumber(valueOverrides[component.id] ?? component.value);
+			const brightOhms = asNumber(component.metadata?.lightResistance);
+			const position   = clamp(
+				asNumber(positionOverrides[component.id] ?? component.metadata?.defaultPosition) ?? 0.5,
+				0,
+				1
+			);
+
+			if (
+				darkOhms === null   || darkOhms   <= 0 ||
+				brightOhms === null || brightOhms <= 0
+			) {
+				unsupported.push({
+					componentId: component.id,
+					kind: component.kind,
+					reason: 'CdS requires a positive `value` (dark resistance) and metadata.lightResistance (bright resistance)'
+				});
+				continue;
+			}
+
+			const [terminalA, terminalB] = component.terminals;
+			const nodeA = topology.terminalToNode[terminalA];
+			const nodeB = topology.terminalToNode[terminalB];
+			if (typeof nodeA !== 'number' || typeof nodeB !== 'number') {
+				unsupported.push({
+					componentId: component.id,
+					kind: component.kind,
+					reason: 'CdS terminals are missing topology node bindings'
+				});
+				continue;
+			}
+			// Float check — if either node has no connection elsewhere the
+			// resistor would dangle and bloat the MNA without contributing,
+			// so we skip it (matches resistor/potentiometer behaviour).
+			if (!connectedNodeSet.has(nodeA) || !connectedNodeSet.has(nodeB)) {
+				continue;
+			}
+
+			// Log-linear: R(pos) = darkR · (lightR/darkR)^pos
+			//   pos=0   → R = darkR
+			//   pos=0.5 → R = sqrt(darkR · lightR)   (geometric mean)
+			//   pos=1   → R = lightR
+			const resistanceOhms = darkOhms * Math.pow(brightOhms / darkOhms, position);
+
+			elements.push({
+				type: 'resistor',
+				componentId: component.id,
+				nodes: [nodeA, nodeB],
+				resistanceOhms
+			});
+			continue;
+		}
+
 		if (component.kind === 'potentiometer') {
 			const totalResistanceOhms = asNumber(valueOverrides[component.id] ?? component.value);
 			const endA = asNumber(component.metadata?.endA);

@@ -360,6 +360,27 @@ const controlsAndSources: KitComponent[] = [
 		metadata: { normallyOpen: true, terminal1: 82, terminal2: 83 }
 	},
 	{
+		// CdS photoresistor.  Resistance varies between `value` (dark) and
+		// `metadata.lightResistance` (bright) according to the user-set
+		// light-level position (0 = dark, 1 = bright).  Mapped via log-
+		// linear interpolation, which matches real CdS cells' decade-per-
+		// log-lux response.  Range is intentionally wide — 100 Ω at full
+		// daylight to 5 MΩ in dark — to cover the kit's intended use
+		// in light-controlled trigger circuits.
+		id: 'LDR1',
+		kind: 'cds',
+		name: 'CdS photoresistor',
+		terminals: [66, 67],
+		value: 5_000_000,            // dark resistance (ohms)
+		unit: 'ohm',
+		metadata: {
+			lightResistance: 100,      // ohms in full daylight
+			defaultPosition: 0.5,      // half-light at startup
+			terminal1: 66,
+			terminal2: 67
+		}
+	},
+	{
 		id: 'VM1',
 		kind: 'voltmeter',
 		name: 'voltmeter',
@@ -381,4 +402,4 @@ export const KIT_TERMINAL_IDS = Array.from(
 	new Set(KIT_COMPONENTS.flatMap((component) => component.terminals))
 ).sort((a, b) => a - b);
 
-export const UNMAPPED_TERMINAL_GAPS = [64, 65, 66, 67, 84, 85];
+export const UNMAPPED_TERMINAL_GAPS = [64, 65, 84, 85];
