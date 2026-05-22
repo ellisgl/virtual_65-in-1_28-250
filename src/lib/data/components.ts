@@ -355,7 +355,7 @@ const controlsAndSources: KitComponent[] = [
 	{
 		id: 'KEY1',
 		kind: 'switch',
-		name: 'morse code key',
+		name: 'Morse code key',
 		terminals: [82, 83],
 		metadata: { normallyOpen: true, terminal1: 82, terminal2: 83 }
 	},
