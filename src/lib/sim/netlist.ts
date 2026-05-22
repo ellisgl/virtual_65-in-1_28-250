@@ -438,6 +438,7 @@ export function buildSimulationNetlist(
 			const rsOhm = asNumber(component.metadata?.rsOhm);
 			const lp1H = asNumber(component.metadata?.lp1H) ?? 0.4;
 			const lsH = asNumber(component.metadata?.lsH) ?? 0.004;
+			const k = asNumber(component.metadata?.couplingDatasheet) ?? 0.999;
 
 			if (primaryStart===null || primaryCenterTap===null || primaryEnd===null ||
 				secondaryStart===null || secondaryEnd===null ||
@@ -454,7 +455,6 @@ export function buildSimulationNetlist(
 			const nPe = topology.terminalToNode[primaryEnd];
 			const nSs = topology.terminalToNode[secondaryStart];
 			const nSe = topology.terminalToNode[secondaryEnd];
-
 			if (typeof nPs!=='number' || typeof nPc!=='number' || typeof nPe!=='number' ||
 				typeof nSs!=='number' || typeof nSe!=='number') {
 				unsupported.push({ componentId: component.id, kind: component.kind, reason: 'Transformer terminals missing node bindings' });
@@ -473,18 +473,7 @@ export function buildSimulationNetlist(
 			// current rises through Lp1, the induced EMF in Lp2 drives the
 			// base further negative (PNP), latching Q2 ON harder. This is the
 			// regenerative feedback that makes the blocking oscillator slow.
-			//
-			// Coupling coefficient — empirical value, NOT the datasheet.
-			// The LT700 datasheet specifies k ≈ 0.995, but the branch-current
-			// MNA in this simulator overshoots violently at that value: the
-			// reflected secondary load + BJT junction caps can't damp out
-			// the rapid flux transfer from primary to secondary.
-			// k = 0.1 is the empirically-tuned value that gives stable
-			// blocking-oscillator behaviour in the metronome / siren circuits.
-			// (Datasheet value is preserved in components.ts as
-			// `couplingDatasheet` for reference only.)
 			const couplingGroup = `${component.id}:core`;
-			const k = 0.1;
 			const lsHeff = lsH; // secondary inductance from metadata (~4mH)
 
 			const midP1 = allocInternalNode();
