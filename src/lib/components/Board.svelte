@@ -295,7 +295,7 @@
 		// 1 kHz against the 250 Hz-centred cone bandpass).  Stacking
 		// another -12 dB makes the siren barely audible.  tanh saturation
 		// prevents clipping so we don't need master-side headroom.
-		audioMasterGain.gain.value = 4.0;
+		audioMasterGain.gain.value = 1.0;
 		audioHighpass  = audioContext.createBiquadFilter();
 		audioHighpass.type = 'highpass';
 		audioHighpass.frequency.value = 25;
