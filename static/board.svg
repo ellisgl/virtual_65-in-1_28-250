@@ -3504,7 +3504,7 @@
          id="g123"
          inkscape:label="Switch_Off"
          transform="matrix(0,1,1,0,12869.366,-12897.368)"
-         style="display:inline;stroke-width:1.86842;stroke-dasharray:none">
+         style="display:none;stroke-width:1.86842;stroke-dasharray:none">
         <path
            style="opacity:0.98;fill:none;stroke:#000000;stroke-width:1.86842;stroke-dasharray:none;stroke-opacity:1"
            d="m 13211.293,211.39765 -70.232,13.74313 h -52.675 l -0.517,90.88053"
