@@ -12,9 +12,4 @@
 		display: grid;
 		gap: 1rem;
 	}
-
-	h1 {
-		margin: 0;
-		font-size: clamp(1.2rem, 2.5vw, 1.8rem);
-	}
 </style>

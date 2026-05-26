@@ -11,7 +11,7 @@
 	import { buildSimulationNetlist } from '$lib/sim';
 	import { initRustDc, isRustDcReady, solveDcRust } from '$lib/sim/dc-rust';
 	import { SimRustWorkletHost } from '$lib/sim/sim-rust-worklet-host';
-	import type { ControlState, WireSpec } from '$lib/sim/sim-rust-worklet-host';
+	import type { ControlState, WireSpec, DiagnosticCapture } from '$lib/sim/sim-rust-worklet-host';
 	import { wiresStore } from '$lib/stores/wires.svelte';
 	import type { DcSolution } from '$lib/types';
 
@@ -23,7 +23,6 @@
 	const VARIABLE_RESISTOR_COMPONENT = KIT_COMPONENTS.find((component) => component.id === 'VR1');
 	const VARIABLE_CAPACITOR_COMPONENT = KIT_COMPONENTS.find((component) => component.id === 'VC1');
 	const KEY_COMPONENT = KIT_COMPONENTS.find((component) => component.id === 'KEY1');
-	const PHOTORESISTOR_COMPONENT = KIT_COMPONENTS.find((component) => component.id === 'LDR1');
 	const VOLTMETER_COMPONENT = KIT_COMPONENTS.find((component) => component.id === 'VM1');
 	const BOARD_VIEWBOX_WIDTH = 437;
 	const BOARD_VIEWBOX_HEIGHT = 267;
@@ -40,7 +39,6 @@
 	const variableCapDefault = Number(
 		VARIABLE_CAPACITOR_COMPONENT?.metadata?.default ?? VARIABLE_CAPACITOR_COMPONENT?.value ?? variableCapMax
 	);
-	const lightLevelDefault = Number(PHOTORESISTOR_COMPONENT?.metadata?.defaultPosition ?? 0.5);
 	const VARIABLE_RES_KNOB_X = 37;
 	const VARIABLE_RES_KNOB_Y = 190;
 	const VARIABLE_RES_KNOB_RADIUS = 9.5;
@@ -59,19 +57,15 @@
 	let topology = $derived(wiresStore.topology);
 	let variableResistancePosition = $state(variableResDefaultPosition);
 	let variableCapacitance = $state(variableCapDefault);
-	let lightLevel = $state(lightLevelDefault);
 	let switchStates = $state<Record<string, boolean>>({});
 
 	// ── Controls helper ────────────────────────────────────────────────────────
 	function currentControls(): ControlState {
 		// Use snapshotted values of $state to ensure the $derived
 		// and $effects see a consistent view.
-		const positionOverrides: Record<string, number> = {};
-		if (VARIABLE_RESISTOR_COMPONENT) positionOverrides.VR1  = variableResistancePosition;
-		if (PHOTORESISTOR_COMPONENT)     positionOverrides.LDR1 = lightLevel;
 		return {
 			valueOverrides:    VARIABLE_CAPACITOR_COMPONENT ? { VC1: variableCapacitance } : {},
-			positionOverrides,
+			positionOverrides: VARIABLE_RESISTOR_COMPONENT  ? { VR1: variableResistancePosition } : {},
 			switchStates:      { ...switchStates }
 		};
 	}
@@ -263,7 +257,7 @@
 				toTerminal:   w.toTerminal
 			}));
 
-			void host.configure(wires, currentControls()).then(() => {
+			void host.configure(wires, currentControls(), 'current').then(() => {
 				if (wasRunning && netlist.elements.length > 0 && netlist.groundNodeId !== null) {
 					host.start();
 					transientRunning = true;
@@ -320,6 +314,9 @@
 					console.warn('[worklet] Check component connections!');
 				}
 			};
+			host.onDiagnosticCapture = (capture) => {
+				downloadDiagnosticCapture(capture);
+			};
 			await host.connect(audioHighpass);
 
 			// Initial configure with current wires + controls.  The worklet
@@ -328,7 +325,7 @@
 				fromTerminal: w.fromTerminal,
 				toTerminal:   w.toTerminal
 			}));
-			await host.configure(wires, currentControls());
+			await host.configure(wires, currentControls(), 'current');
 			lastHandledResetKey = transientResetKey;
 			workletHost = host;
 		} catch (err) {
@@ -433,6 +430,97 @@
 		a.download = 'circuit.txt';
 		a.click();
 		URL.revokeObjectURL(url);
+	}
+
+	// ── Diagnostic-capture WAV writer ─────────────────────────────────────────
+	//
+	// Builds a 16-bit PCM mono WAV from a Float32Array of samples.  The
+	// sample values are clipped to [-1, +1] before quantizing.  If the
+	// caller has scaled their data into that range already (which we do
+	// below for the raw and dcBlocked channels), the WAV faithfully
+	// preserves the waveform shape.
+	function floatArrayToWavBlob(samples: Float32Array, sampleRate: number): Blob {
+		const dataBytes = samples.length * 2;
+		const buffer = new ArrayBuffer(44 + dataBytes);
+		const view = new DataView(buffer);
+		// RIFF header
+		view.setUint32(0, 0x52494646, false); // 'RIFF'
+		view.setUint32(4, 36 + dataBytes, true);
+		view.setUint32(8, 0x57415645, false); // 'WAVE'
+		// fmt subchunk
+		view.setUint32(12, 0x666d7420, false); // 'fmt '
+		view.setUint32(16, 16, true);          // PCM subchunk size
+		view.setUint16(20, 1, true);           // PCM format
+		view.setUint16(22, 1, true);           // 1 channel (mono)
+		view.setUint32(24, sampleRate, true);
+		view.setUint32(28, sampleRate * 2, true); // byte rate
+		view.setUint16(32, 2, true);           // block align
+		view.setUint16(34, 16, true);          // bits per sample
+		// data subchunk
+		view.setUint32(36, 0x64617461, false); // 'data'
+		view.setUint32(40, dataBytes, true);
+		// PCM samples
+		for (let i = 0; i < samples.length; i++) {
+			const s = Math.max(-1, Math.min(1, samples[i]));
+			view.setInt16(44 + i * 2, Math.round(s * 32767), true);
+		}
+		return new Blob([buffer], { type: 'audio/wav' });
+	}
+
+	function triggerDownload(blob: Blob, filename: string): void {
+		const url = URL.createObjectURL(blob);
+		const a = document.createElement('a');
+		a.href = url;
+		a.download = filename;
+		a.click();
+		URL.revokeObjectURL(url);
+	}
+
+	// Receives a {@link DiagnosticCapture} from the worklet and ships four
+	// WAV files to the user's downloads folder.  The raw, dcBlocked, and
+	// postFilter channels are normalized by the same global scale factor
+	// so peaks are directly comparable; the scale used is logged to the
+	// console so absolute voltages can be recovered.  The postTanh
+	// channel is already in [-1, +1] (that's what tanh outputs) so it's
+	// written as-is.
+	function downloadDiagnosticCapture(capture: DiagnosticCapture): void {
+		const { raw, dcBlocked, postFilter, postTanh, sampleRate, samplesPerChannel } = capture;
+		const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+
+		// Find peak across raw + dcBlocked + postFilter for shared scale.
+		// postTanh is naturally bounded already.
+		let peak = 1e-9;
+		for (let i = 0; i < samplesPerChannel; i++) {
+			const a = Math.abs(raw[i]);        if (a > peak) peak = a;
+			const b = Math.abs(dcBlocked[i]);  if (b > peak) peak = b;
+			const c = Math.abs(postFilter[i]); if (c > peak) peak = c;
+		}
+		const scale = 1 / peak;
+
+		const rawNorm = new Float32Array(samplesPerChannel);
+		const dcNorm  = new Float32Array(samplesPerChannel);
+		const flNorm  = new Float32Array(samplesPerChannel);
+		for (let i = 0; i < samplesPerChannel; i++) {
+			rawNorm[i] = raw[i] * scale;
+			dcNorm[i]  = dcBlocked[i] * scale;
+			flNorm[i]  = postFilter[i] * scale;
+		}
+
+		triggerDownload(floatArrayToWavBlob(rawNorm,   sampleRate),
+			`diagnostic-raw-${ts}.wav`);
+		triggerDownload(floatArrayToWavBlob(dcNorm,    sampleRate),
+			`diagnostic-dc-blocked-${ts}.wav`);
+		triggerDownload(floatArrayToWavBlob(flNorm,    sampleRate),
+			`diagnostic-post-filter-${ts}.wav`);
+		triggerDownload(floatArrayToWavBlob(postTanh,  sampleRate),
+			`diagnostic-post-tanh-${ts}.wav`);
+
+		console.log(
+			`[diagnostic] capture delivered: ${samplesPerChannel} samples @ ${sampleRate} Hz, ` +
+			`raw/dcBlocked/postFilter peak = ${peak.toFixed(4)} (scaled to [-1,1] by ${scale.toFixed(4)}). ` +
+			`To convert WAV sample back to native units, multiply by ${peak.toFixed(4)}. ` +
+			`postTanh is in native [-1, +1] AudioContext range.`,
+		);
 	}
 
 	function loadWires(e: Event) {
@@ -571,22 +659,14 @@
 		<button class="clear-btn" onclick={() => wiresStore.clearAll()} disabled={wiresStore.wires.length === 0}>
 			Clear all wires
 		</button>
-
-		{#if PHOTORESISTOR_COMPONENT}
-			<label class="ldr-control" title="LDR1 (CdS photoresistor) light level — 0% dark, 100% bright">
-				<span class="ldr-label-text">LDR1 light</span>
-				<input
-					class="ldr-slider"
-					type="range"
-					min="0"
-					max="1"
-					step="0.01"
-					value={lightLevel}
-					oninput={(e) => (lightLevel = Number((e.currentTarget as HTMLInputElement).value))}
-				/>
-				<span class="ldr-value">{(lightLevel * 100).toFixed(0)}%</span>
-			</label>
-		{/if}
+		<button
+			class="clear-btn"
+			onclick={() => workletHost?.startDiagnosticCapture(5.0)}
+			disabled={!workletHost || !transientRunning}
+			title="Records 5 seconds of the worklet's internal audio chain (raw simulator output, post-DC-block, post-tanh) and downloads three WAV files for offline analysis."
+		>
+			Capture 5s diagnostic
+		</button>
 	</div>
 
 	<div class="board-container">
@@ -748,33 +828,6 @@
 	.clear-btn:disabled {
 		opacity: 0.35;
 		cursor: default;
-	}
-
-	.ldr-control {
-		display: inline-flex;
-		align-items: center;
-		gap: 0.5rem;
-		margin-left: 0.5rem;
-		padding: 0.2rem 0.6rem;
-		border: 1px solid #555;
-		border-radius: 4px;
-		background: #1f1f1f;
-		color: #eee;
-		font-size: 0.85rem;
-		cursor: pointer;
-	}
-	.ldr-label-text {
-		user-select: none;
-	}
-	.ldr-slider {
-		width: 110px;
-		cursor: pointer;
-	}
-	.ldr-value {
-		min-width: 3em;
-		text-align: right;
-		font-family: monospace;
-		color: #ffd966;
 	}
 
 	.board-container {

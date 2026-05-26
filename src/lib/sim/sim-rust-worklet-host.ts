@@ -34,6 +34,43 @@ export interface ControlState {
     switchStates:      Record<string, boolean>;
 }
 
+/**
+ * Diagnostic capture payload delivered when `startDiagnosticCapture` finishes.
+ *
+ * The four channels expose the same signal at four points in the worklet's
+ * audio chain so you can pinpoint where harmonic content or amplitude
+ * artifacts are introduced:
+ *
+ *   raw        — pure simulator probe value (voltage or current), pre-everything
+ *   dcBlocked  — after the 1st-order DC blocker (HPF ~1.5 Hz at 48 kHz)
+ *   postFilter — after the speaker-resonance bandpass (default 2800 Hz, Q=10);
+ *                bypassed (== dcBlocked) if `setSpeakerFilter { enabled: false }`
+ *   postTanh   — after tanh(x/AUDIO_SCALE), exactly what reaches the AudioContext
+ *
+ * Compare raw ↔ postFilter to see what the speaker-resonance simulation
+ * does to the signal.  Compare postFilter ↔ postTanh to see what tanh
+ * saturation adds.  Compare raw ↔ postTanh for total chain effect.
+ */
+export interface DiagnosticCapture {
+    sampleRate:        number;
+    samplesPerChannel: number;
+    raw:               Float32Array;
+    dcBlocked:         Float32Array;
+    postFilter:        Float32Array;
+    postTanh:          Float32Array;
+}
+
+/**
+ * Settings for the speaker-resonance bandpass filter in the audio chain.
+ * All fields optional; only provided ones are updated on the worklet.
+ */
+export interface SpeakerFilterSettings {
+    enabled?: boolean;
+    f0?:      number;   // center frequency in Hz (default 2800)
+    Q?:       number;   // quality factor (default 10)
+    gain?:    number;   // post-filter scalar (default 0.15)
+}
+
 let cachedModule: WebAssembly.Module | null = null;
 let moduleLoadPromise: Promise<WebAssembly.Module> | null = null;
 
@@ -74,6 +111,12 @@ export class SimRustWorkletHost {
 
     onSnapshot: ((volts: NodeVoltages) => void) | null = null;
     onError:    ((msg: string) => void) | null = null;
+    /**
+     * Fires once after a `startDiagnosticCapture` call's worth of samples have
+     * been recorded.  Single-shot — to take another capture, call
+     * `startDiagnosticCapture` again.
+     */
+    onDiagnosticCapture: ((capture: DiagnosticCapture) => void) | null = null;
 
     constructor(ctx: AudioContext)  {
         this.ctx = ctx;
@@ -184,6 +227,45 @@ export class SimRustWorkletHost {
         this.node?.port.postMessage({ type: 'audioProbe', probe });
     }
 
+    /**
+     * Trigger a one-shot diagnostic capture of the worklet's internal audio
+     * chain.  Once the requested duration of samples has been recorded by
+     * the worklet (next emit() call), `onDiagnosticCapture` will fire with
+     * a {@link DiagnosticCapture} payload containing three Float32Arrays
+     * for the raw / dcBlocked / postTanh signals.
+     *
+     * No-op if the worklet isn't connected or running.  Calling again
+     * before a previous capture completes silently overwrites the in-
+     * flight buffer with a fresh one.
+     */
+    startDiagnosticCapture(seconds: number = 1.0): void {
+        if (!this.node) {
+            console.warn('[host] startDiagnosticCapture: worklet not connected');
+            return;
+        }
+        this.node.port.postMessage({ type: 'startDiagnosticCapture', seconds });
+    }
+
+    /**
+     * Live-tune (or disable) the speaker-resonance bandpass in the worklet's
+     * audio chain.  All fields optional — only provided ones are updated.
+     * State is preserved across coefficient changes, so live sweeps don't
+     * click.
+     *
+     * @example
+     *   workletHost.setSpeakerFilter({ f0: 2870 });        // try different f0
+     *   workletHost.setSpeakerFilter({ Q: 15 });           // try sharper Q
+     *   workletHost.setSpeakerFilter({ gain: 0.2 });       // louder
+     *   workletHost.setSpeakerFilter({ enabled: false });  // bypass entirely
+     */
+    setSpeakerFilter(settings: SpeakerFilterSettings): void {
+        if (!this.node) {
+            console.warn('[host] setSpeakerFilter: worklet not connected');
+            return;
+        }
+        this.node.port.postMessage({ type: 'setSpeakerFilter', ...settings });
+    }
+
     start(): void {
         if ((globalThis as any).__simDebug) console.trace('[host] start() called');
         this.node?.port.postMessage({ type: 'start', debug: !!(globalThis as any).__simDebug });
@@ -214,7 +296,23 @@ export class SimRustWorkletHost {
         return buildSimulationNetlist(topology, KIT_COMPONENTS, controls);
     }
 
-    private onMessage(msg: { type?: string; nodeVoltages?: NodeVoltages; error?: string; state?: any }): void {
+    private onMessage(msg: {
+        type?: string;
+        nodeVoltages?: NodeVoltages;
+        error?: string;
+        state?: any;
+        sampleRate?: number;
+        samplesPerChannel?: number;
+        raw?: Float32Array;
+        dcBlocked?: Float32Array;
+        postFilter?: Float32Array;
+        postTanh?: Float32Array;
+        total?: number;
+        enabled?: boolean;
+        f0?: number;
+        Q?: number;
+        gain?: number;
+    }): void {
         if (!msg || !msg.type) return;
         switch (msg.type) {
             case 'snapshot':
@@ -229,6 +327,32 @@ export class SimRustWorkletHost {
             case 'error':
                 console.error('[sim-rust-worklet] error:', msg.error);
                 this.onError?.(String(msg.error));
+                break;
+            case 'diagnosticCaptureStarted':
+                if ((globalThis as any).__simDebug) {
+                    console.log('[host] diagnostic capture armed —',
+                                msg.total, 'samples coming @ ' + msg.sampleRate + ' Hz');
+                }
+                break;
+            case 'diagnosticCapture':
+                if (!msg.raw || !msg.dcBlocked || !msg.postFilter || !msg.postTanh) {
+                    console.warn('[host] diagnosticCapture missing channel data');
+                    break;
+                }
+                this.onDiagnosticCapture?.({
+                    sampleRate:        msg.sampleRate ?? 48000,
+                    samplesPerChannel: msg.samplesPerChannel ?? msg.raw.length,
+                    raw:               msg.raw,
+                    dcBlocked:         msg.dcBlocked,
+                    postFilter:        msg.postFilter,
+                    postTanh:          msg.postTanh,
+                });
+                break;
+            case 'speakerFilterUpdated':
+                if ((globalThis as any).__simDebug) {
+                    console.log(`[host] speaker filter:`,
+                                msg.enabled ? `f0=${msg.f0}Hz Q=${msg.Q} gain=${msg.gain}` : 'disabled');
+                }
                 break;
         }
     }

@@ -77,10 +77,39 @@ const FADE_IN_SAMPLES = 256;     // ~6 ms ramp on first connect
 // metronome circuit.
 const SPEAKER_CURRENT_SCALE = 100;
 
+// ── Speaker mechanical-resonance bandpass ────────────────────────────────────
+// Real small speakers have a strong mechanical resonance that turns the
+// spike-train output of the BJT regenerative oscillator into a continuous
+// tone at the cone's natural frequency.  Our SPK1 model is purely
+// electrical (Rvc + Lvc), so spikes pass through verbatim and produce the
+// "zipper" / "clicks" you hear at the spike rate (~840 Hz on P18).
+//
+// This biquad bandpass filter (Audio EQ Cookbook, "BPF constant 0 dB peak
+// gain") sits between the DC blocker and the tanh saturator, simulating the
+// cone's resonant response.  Default values target the real-kit P18 siren's
+// observed audible pitch (~2.8 kHz).  Runtime-adjustable via the
+// 'setSpeakerFilter' worklet message.
+//
+//   f0   center frequency (Hz)
+//   Q    quality factor — ringing time ≈ Q / (π·f0); for Q=10 at 2800 Hz
+//        the ring lasts ~1.1 ms, just long enough to bridge the gap between
+//        the simulator's ~840 Hz spikes (1.2 ms spike interval).
+//   gain post-filter scalar — brings the filter's natural output amplitude
+//        into the tanh's linear region.  Lower = cleaner sine, higher = more
+//        gentle saturation harmonics.
+//
+const SPEAKER_FILTER_DEFAULTS = Object.freeze({
+    enabled: false,
+    f0: 2800,
+    Q:  10,
+    gain: 0.15,
+});
+
 // ── Solver constants ─────────────────────────────────────────────────────────
 
 const DT_MIN    = 1e-6;
-const DT_MAX    = 0.5e-3;
+//const DT_MAX    = 0.5e-3;
+const DT_MAX    = 20e-6;
 const DT_INIT   = 10e-6;
 
 const SNAPSHOT_PERIOD_SEC = 0.033;   // ~30 fps
@@ -274,6 +303,62 @@ class SimRustProcessor extends AudioWorkletProcessor {
         this.bootToneSamples = Math.round(sampleRate * 0.2);
         this.bootTonePos     = 0;
         this.bootToneFreq    = 440;
+
+        // ── Diagnostic raw-waveform capture ───────────────────────────────
+        // Triggered by { type: 'startDiagnosticCapture', seconds } message.
+        // While active, records four parallel streams per audio sample:
+        //   raw:        simulator probe value, pre-DC-block, pre-everything
+        //   dcBlocked:  after DC blocker, pre-filter
+        //   postFilter: after speaker-resonance BPF, pre-tanh
+        //   postTanh:   after tanh saturator (what AudioContext receives)
+        // When the buffer fills, posts a 'diagnosticCapture' message back to
+        // the host and clears itself.  Capture is fire-and-forget — no
+        // overlapping captures supported.
+        this.diagCapture = null;
+
+        // ── Speaker mechanical-resonance BPF state ────────────────────────
+        this.speakerFilter = {
+            enabled: SPEAKER_FILTER_DEFAULTS.enabled,
+            f0:      SPEAKER_FILTER_DEFAULTS.f0,
+            Q:       SPEAKER_FILTER_DEFAULTS.Q,
+            gain:    SPEAKER_FILTER_DEFAULTS.gain,
+            // biquad coefficients (computed from f0, Q, sampleRate)
+            b0: 0, b1: 0, b2: 0, a1: 0, a2: 0,
+            // biquad state — Direct Form I:
+            //   y[n] = b0*x[n] + b1*x[n-1] + b2*x[n-2] - a1*y[n-1] - a2*y[n-2]
+            x1: 0, x2: 0, y1: 0, y2: 0,
+        };
+        this._recomputeSpeakerFilterCoeffs();
+    }
+
+    /**
+     * Recompute the BPF biquad coefficients from current f0/Q/sampleRate
+     * using the Audio EQ Cookbook's "BPF (constant 0 dB peak gain)" form.
+     * Call after any change to f0 or Q.  State variables are NOT reset —
+     * the filter retains its memory across coefficient updates so live
+     * tuning doesn't produce clicks.
+     */
+    _recomputeSpeakerFilterCoeffs() {
+        const sf = this.speakerFilter;
+        const w0    = (2 * Math.PI * sf.f0) / sampleRate;
+        const cos_w = Math.cos(w0);
+        const sin_w = Math.sin(w0);
+        const alpha = sin_w / (2 * Math.max(0.1, sf.Q));   // clamp Q to avoid divide-by-zero
+        const a0    = 1 + alpha;
+        sf.b0 =  alpha       / a0;
+        sf.b1 =  0;
+        sf.b2 = -alpha       / a0;
+        sf.a1 = (-2 * cos_w) / a0;
+        sf.a2 = (1 - alpha)  / a0;
+    }
+
+    /**
+     * Reset only the biquad's IIR state.  Use when restarting the sim from
+     * scratch so leftover ringing from the previous run doesn't bleed in.
+     */
+    _resetSpeakerFilterState() {
+        const sf = this.speakerFilter;
+        sf.x1 = 0; sf.x2 = 0; sf.y1 = 0; sf.y2 = 0;
     }
 
     post(msg) {
@@ -333,6 +418,7 @@ class SimRustProcessor extends AudioWorkletProcessor {
                     this.prevV = 0;
                     this.audioPhase = 0;
                     this.fadePos = 0;
+                    this._resetSpeakerFilterState();
                     this.didFirstQuantumReport = false;
                     this.errorReported = false;
                     break;
@@ -426,6 +512,52 @@ class SimRustProcessor extends AudioWorkletProcessor {
                 case 'audioProbe':
                     this.audioProbe = msg.probe;
                     break;
+
+                case 'setSpeakerFilter': {
+                    // Live-tune the speaker-resonance bandpass.
+                    // Accepts any subset of { enabled, f0, Q, gain }.
+                    // Unspecified fields are left at their current values.
+                    const sf = this.speakerFilter;
+                    if (typeof msg.enabled === 'boolean') sf.enabled = msg.enabled;
+                    if (typeof msg.f0      === 'number' && msg.f0 > 0)   sf.f0   = msg.f0;
+                    if (typeof msg.Q       === 'number' && msg.Q  > 0.1) sf.Q    = msg.Q;
+                    if (typeof msg.gain    === 'number' && msg.gain >= 0) sf.gain = msg.gain;
+                    this._recomputeSpeakerFilterCoeffs();
+                    // Note: state intentionally NOT reset — keeps tuning
+                    // smooth/glitch-free.
+                    if (globalThis.__simDebug) {
+                        console.log('[worklet] speaker filter:',
+                                    sf.enabled ? `f0=${sf.f0}Hz Q=${sf.Q} gain=${sf.gain}` : 'disabled');
+                    }
+                    this.post({
+                        type: 'speakerFilterUpdated',
+                        enabled: sf.enabled, f0: sf.f0, Q: sf.Q, gain: sf.gain,
+                    });
+                    break;
+                }
+
+                case 'startDiagnosticCapture': {
+                    // Allocate four Float32Arrays sized for the requested
+                    // capture duration.  ~768 KB at 1s/48kHz/4-channel —
+                    // small enough to clone cheaply across postMessage.
+                    const seconds = Math.max(0.05, Math.min(10.0, Number(msg.seconds) || 1.0));
+                    const total   = Math.ceil(seconds * sampleRate);
+                    this.diagCapture = {
+                        raw:        new Float32Array(total),
+                        dcBlocked:  new Float32Array(total),
+                        postFilter: new Float32Array(total),
+                        postTanh:   new Float32Array(total),
+                        pos:        0,
+                        total,
+                        sampleRate,
+                    };
+                    if (globalThis.__simDebug) {
+                        console.log('[worklet] diagnostic capture armed:',
+                                    seconds + 's =', total, 'samples');
+                    }
+                    this.post({ type: 'diagnosticCaptureStarted', total, sampleRate });
+                    break;
+                }
 
                 case 'ping':
                     // No-op to keep the port/event-loop active.
@@ -684,6 +816,7 @@ class SimRustProcessor extends AudioWorkletProcessor {
                 this.prevV = 0;
                 this.dcPrevOut = 0;
                 this.dcPrevIn = 0;
+                this._resetSpeakerFilterState();
                 this.didFirstQuantumReport = false;
                 
                 // If there are remaining frames in this quantum, we MUST
@@ -769,6 +902,12 @@ class SimRustProcessor extends AudioWorkletProcessor {
                 rawSpkV = 0;
             }
 
+            // Diagnostic capture: raw simulator voltage (pre-everything).
+            const cap = this.diagCapture;
+            if (cap !== null && cap.pos < cap.total) {
+                cap.raw[cap.pos] = rawSpkV;
+            }
+
             // Track speaker-V swing for the periodic log.
             if (rawSpkV < this.spkMinSinceLog) this.spkMinSinceLog = rawSpkV;
             if (rawSpkV > this.spkMaxSinceLog) this.spkMaxSinceLog = rawSpkV;
@@ -787,12 +926,78 @@ class SimRustProcessor extends AudioWorkletProcessor {
             if (!Number.isFinite(dcBlocked)) dcBlocked = 0;
             this.dcPrevIn  = rawSpkV;
             this.dcPrevOut = dcBlocked;
-            // Audio chain: DC block → tanh saturator → fade-in.
-            let s = Math.tanh(dcBlocked / AUDIO_SCALE);
+
+            // Diagnostic capture: post-DC-block, pre-tanh.
+            if (cap !== null && cap.pos < cap.total) {
+                cap.dcBlocked[cap.pos] = dcBlocked;
+            }
+
+            // ── Speaker mechanical-resonance bandpass ───────────────────
+            // Sits between DC blocker and tanh.  Models the cone's natural
+            // resonance, converting the simulator's spike-train output into
+            // a continuous tone at ~f0 (default 2800 Hz).  Real small
+            // speakers do this acoustically; our SPK1 model is purely
+            // electrical, so we apply the equivalent shaping in the audio
+            // chain.  Bypassable via `setSpeakerFilter { enabled: false }`.
+            const sf = this.speakerFilter;
+            let filtered;
+            if (sf.enabled) {
+                // Direct-Form-I biquad, b1=0 so the x[n-1] term drops out.
+                filtered = sf.b0 * dcBlocked
+                         + sf.b2 * sf.x2
+                         - sf.a1 * sf.y1
+                         - sf.a2 * sf.y2;
+                if (!Number.isFinite(filtered)) filtered = 0;
+                // Shift state.
+                sf.x2 = sf.x1;  sf.x1 = dcBlocked;
+                sf.y2 = sf.y1;  sf.y1 = filtered;
+                // Apply post-filter gain — brings the BPF's output amplitude
+                // into the tanh's linear region.
+                filtered *= sf.gain;
+            } else {
+                filtered = dcBlocked;
+            }
+
+            // Diagnostic capture: post-filter, pre-tanh.
+            if (cap !== null && cap.pos < cap.total) {
+                cap.postFilter[cap.pos] = filtered;
+            }
+
+            // Audio chain: tanh saturator → fade-in.
+            let s = Math.tanh(filtered / AUDIO_SCALE);
             // Fade-in on first connect.
             if (this.fadePos < FADE_IN_SAMPLES) {
                 s *= this.fadePos / FADE_IN_SAMPLES;
                 this.fadePos++;
+            }
+
+            // Diagnostic capture: post-tanh (= what AudioContext receives).
+            if (cap !== null && cap.pos < cap.total) {
+                cap.postTanh[cap.pos] = s;
+                cap.pos++;
+                if (cap.pos >= cap.total) {
+                    // Buffer is full — ship it back to the host and clear.
+                    // Transfer ownership of the underlying ArrayBuffers
+                    // (cheap; avoids ~768 KB of structured-clone copying).
+                    this.port.postMessage(
+                        {
+                            type: 'diagnosticCapture',
+                            sampleRate: cap.sampleRate,
+                            samplesPerChannel: cap.total,
+                            raw:        cap.raw,
+                            dcBlocked:  cap.dcBlocked,
+                            postFilter: cap.postFilter,
+                            postTanh:   cap.postTanh,
+                        },
+                        [cap.raw.buffer, cap.dcBlocked.buffer,
+                         cap.postFilter.buffer, cap.postTanh.buffer],
+                    );
+                    this.diagCapture = null;
+                    if (globalThis.__simDebug) {
+                        console.log('[worklet] diagnostic capture delivered:',
+                                    cap.total, 'samples per channel');
+                    }
+                }
             }
 
             // Track output amplitude for the periodic log.  NaN handling:
