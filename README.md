@@ -1,75 +1,191 @@
-# CdS photoresistor (LDR1) — implementation
+# Virtual Science Fair 65 In 1 Electronic Project Kit (Cat# 28-250)
 
-## What this adds
-Support for the kit's CdS photoresistor as a new component kind.
-Two-terminal element on board terminals **66, 67**.  Resistance is
-controlled by a "Light level" slider in the toolbar:
-* 0% (dark)   → **350 MΩ**
-* 100% (bright) → **50 Ω**
-* Mapped via log-linear interpolation, matching the decade-per-log-lux
-  response of a real CdS cell.  At 50% you get the geometric mean,
-  ~132 kΩ — not the arithmetic mean (which would be dominated by the
-  much larger dark value).
+A web-based simulator inspired by the classic Radio Shack spring-terminal electronics kit.
 
-No Rust-side changes needed.  The CdS emits as a plain resistor element
-which `rust-e-sim-core` already handles.  No wasm rebuild required.
+## Status
 
-## What's in this package
+Work in progress. The current focus is building the board data layer and interactive wiring POC.
 
-Drop-in replacements for five files (no new files except the demo
-script):
+## Requirements
 
-* `src/lib/types.ts` — adds `'cds'` to the `ComponentKind` union.
-* `src/lib/data/components.ts` — adds the `LDR1` catalog entry.
-* `src/lib/sim/netlist.ts` — adds the `'cds'` element-emission handler.
-* `src/lib/components/Board.svelte` — adds `lightLevel` state, plumbs it
-  through `currentControls()`, and renders a "LDR1 light" slider in the
-  toolbar (next to the Run / Save / Load buttons).
-* `src/lib/components/board/BoardDebugPanels.svelte` — adds matching
-  `lightLevel` / `hasPhotoresistor` / `onLightLevelChange` props
-  (forward-compatible; this file isn't currently mounted but the props
-  are wired so adopting it later requires no further changes).
+- [Bun](https://bun.sh/) 1.3+
 
-Plus:
-
-* `scripts/cds-demo.ts` — runnable verification:
-  `bun scripts/cds-demo.ts` will sweep the light level from 0 → 1 and
-  print the emitted resistance at each step, comparing to the expected
-  log-linear curve.  Also runs a negative test ensuring missing
-  `lightResistance` metadata is reported as unsupported.
-* `patches/*.patch` — unified diffs for each changed file, for review.
-
-## Apply
+## Quick Start (Bun)
 
 ```bash
-tar xzf cds-impl.tar.gz -C path/to/your-svelte-project/
-# No rebuild needed — drop in, hard-reload the page.
-bun scripts/cds-demo.ts   # optional verification
+bun install
+bun run dev
 ```
 
-## Behaviour notes
+Then open the local URL shown by Vite.
 
-* **First-load default**: half-light (position 0.5 ≈ 132 kΩ).  The
-  catalog's `metadata.defaultPosition` controls this — change there to
-  shift the start state without touching code.
-* **The 7-million-to-one dynamic range** (50 Ω → 350 MΩ) is wide but
-  numerically safe for the sparse-LU solver — well under the ~12-order
-  precision ceiling of f64 with realistic conductance scaling.  Mixed
-  with the other kit components (R1 = 100 Ω, R10 = 220 kΩ, etc.) the
-  MNA stays well-conditioned.
-* **Slider is global** — affects every circuit that includes terminals
-  66 and 67 in the wired topology.  If a circuit doesn't include LDR1,
-  the slider has no effect (the element is built but the node is
-  floating, which the builder skips).
-* **No physical knob on the kit board** — that's why the control lives
-  in the toolbar rather than as an SVG overlay knob.  The real kit's
-  CdS responds to ambient light from the room; this slider is the
-  simulator's stand-in.
+## Useful Commands
 
-## Suggested first test circuit
+```bash
+bun run check
+bun run lint
+bun run build
+bun run preview
+```
 
-The kit's manual will have a "light-controlled" circuit using LDR1 —
-probably as a base-current setter for Q3 (NPN) so that the speaker
-buzzes when the room goes dark, or vice versa.  Wire that up, click
-Run, then sweep the LDR1 light slider — you should hear the buzz
-appear/disappear at the trigger threshold.
+## Project Goal (POC)
+
+- Drag wires between spring terminals
+- Free-form wiring using the kit part list
+- Real-time simulation with SPICE-like device models where possible
+- Audio output support for speaker circuits
+
+## Data Layer
+
+Core simulator data currently lives in these files:
+
+- `src/lib/types.ts` - shared TypeScript types used by component and terminal data
+- `src/lib/data/components.ts` - canonical 65-in-1 part catalog (terminals, values, model metadata)
+- `src/lib/data/terminalPositions.ts` - spring terminal coordinates in board SVG space (`viewBox 0 0 437 267`)
+- `src/lib/data/index.ts` - barrel exports for data modules
+
+### Editing Workflow
+
+1. Add or update part definitions in `src/lib/data/components.ts`.
+2. Measure spring positions from `graphics/65-in-1_new.svg` and update `src/lib/data/terminalPositions.ts`.
+3. Run checks:
+
+```bash
+bun run check
+```
+
+4. Validate in the app:
+
+```bash
+bun run dev
+```
+
+### Terminal Placement Guide (Inkscape)
+
+Use this workflow to place spring terminal coordinates into `src/lib/data/terminalPositions.ts`.
+
+1. Open `graphics/65-in-1_new.svg` in Inkscape.
+2. Confirm document viewBox is `0 0 437 267` (the app uses this coordinate space directly).
+3. Enable snapping and place a temporary circle marker centered on a spring terminal.
+4. Read the marker center coordinates (`X`, `Y`) from Inkscape's tool controls.
+5. Copy those numbers into `TERMINAL_POSITIONS[terminalId]` as `{ x, y }`.
+6. Repeat for each terminal ID present in `KIT_TERMINAL_IDS`.
+
+Coordinate rules:
+
+- Keep units in SVG/viewBox space (do not convert to pixels).
+- Use top-left origin coordinates as reported by Inkscape.
+- Keep unmapped terminals as `{ x: -1, y: -1 }` until measured.
+- Use decimal values when needed for precise alignment.
+
+Example:
+
+```ts
+TERMINAL_POSITIONS[1] = { x: 24.5, y: 38.2 };
+TERMINAL_POSITIONS[2] = { x: 42.1, y: 38.2 };
+```
+
+Quick verification loop:
+
+```bash
+bun run check
+bun run dev
+```
+
+Then visually confirm the interactive hotspot aligns with each spring center in the running app.
+
+Quick progress command:
+
+```bash
+bun run terminals:status
+```
+
+Strict mode (fails if any terminal is still unmapped):
+
+```bash
+bun run terminals:check
+```
+
+List available section names:
+
+```bash
+bun run terminals:sections
+```
+
+Show progress for one section:
+
+```bash
+bun scripts/terminals-status.ts --section "Resistors"
+```
+
+## Topology Layer (Next Step)
+
+The app now derives a circuit topology from your wire connections in real time.
+
+- Builder: `src/lib/sim/topology.ts`
+- Store access: `src/lib/stores/wires.svelte.ts` via `wiresStore.topology`
+- UI debug panel: `src/lib/components/Board.svelte`
+
+`CircuitTopology` output includes:
+
+- node groups (terminal IDs merged by wire unions)
+- terminal-to-node map
+- component pin-to-node bindings
+- connected node IDs
+- inferred ground node (from battery negative terminal metadata)
+
+Topology demo harness:
+
+```bash
+bun run topology:demo
+```
+
+## Runtime Netlist Layer
+
+The project now includes a first runtime netlist compiler that transforms topology into solver-ready elements.
+
+- Compiler: `src/lib/sim/netlist.ts`
+- Current compiled types: `resistor`, `voltage-source` (battery)
+- Unsupported parts are reported explicitly with reasons
+
+Runtime demo harness:
+
+```bash
+bun run runtime:demo
+```
+
+## DC Solver Layer
+
+A minimal linear DC solver is now available for compiled runtime netlists.
+
+- Solver: `src/lib/sim/dc.ts`
+- Method: Modified nodal analysis + Gaussian elimination
+- Current scope: resistors and battery voltage sources
+
+Run demo (the runtime demo also exercises the DC solver):
+
+```bash
+bun run runtime:demo
+```
+
+## Transient Step Layer
+
+Capacitors are now compiled into the runtime netlist and a minimal transient stepper is available.
+
+- Compiler support: `capacitor`, `variable-capacitor`
+- Stepper: `src/lib/sim/transient.ts`
+- Method: backward-Euler capacitor companion model
+
+Board UI: live transient controls plus adjustable `VC1` variable capacitor slider
+
+Debug UI: capacitor charge/voltage state panel
+
+Run RC step demo:
+
+```bash
+bun run transient:demo
+```
+
+Ground-terminal policy is centralized in:
+
+- `src/lib/sim/config.ts` (`GROUND_TERMINAL_IDS`)
