@@ -100,13 +100,18 @@ export class Simulator {
     /**
      * Snapshot of relay active flags (`true` = energised).  Returned as
      * `Vec<u8>` since `Vec<bool>` isn't natively exposable through
-     * wasm-bindgen; 0/1 encoding.
+     * rust-e-sim-wasm-bindgen; 0/1 encoding.
      */
     export_relay_active(): Uint8Array;
     /**
      * Snapshot of BJT junction-cap voltages (layout: `[Q0_Vbe, Q0_Vbc, Q1_Vbe, …]`).
      */
     export_tj_cap_volts(): Float64Array;
+    /**
+     * Export the entire simulator state (netlist + current voltages/currents)
+     * as a single JS object.
+     */
+    get_full_state(): any;
     import_cap_volts(v: Float64Array): void;
     import_gear2_ready(ready: boolean): void;
     import_inductor_currents(v: Float64Array): void;
@@ -143,6 +148,11 @@ export class Simulator {
      */
     node_voltage(node_id: number): number;
     /**
+     * Import a previously exported simulator state.  Invalidates the current
+     * compilation, so `compile()` must be called before the next step.
+     */
+    set_full_state(val: any): void;
+    /**
      * Solve for the DC operating point and write the result into the
      * transient state.  Caps are treated as open, inductors as shorts.
      * Must be called after `compile()` and before the first `step()` if
@@ -163,6 +173,52 @@ export class Simulator {
      * (falls back to BE on the first step after compile/DC).
      */
     step_with_gear(dt: number, gear: number): StepResult;
+    /**
+     * Audio-hot-path step variant that returns a packed `u32` instead of
+     * a wasm-bindgen-managed `StepResult` struct.
+     *
+     * Why this exists: every `step_with_gear` call returning `StepResult`
+     * costs ~5 JS↔WASM boundary crossings (the call itself, the wasm
+     * alloc for the struct, the JS wrapper construction, getter calls
+     * for `.ok`/`.iters`/`.issue`, and the final `.free()` to release
+     * the wasm allocation).  At ~1-3 µs per crossing in Chrome, that's
+     * 10-15 µs of pure overhead per step before any actual sim work.
+     *
+     * In the AudioWorklet this is called ~128-256 times per quantum
+     * (2.67 ms of audio).  The overhead alone consumes most of the
+     * quantum budget — causing the worklet to fall behind realtime and
+     * Chrome to drop quanta (the user hears silence even though the
+     * simulator output is correct).
+     *
+     * Encoding of the returned `u32` (little-endian bit layout):
+     * ```text
+     *   bit 0       : ok    (1 = success, 0 = failure)
+     *   bits 1..=7  : issue (0 = ok, 1 = singular, 2 = no-converge, 3 = bad-dt)
+     *   bits 8..=31 : iters (24-bit Newton iteration count, plenty)
+     * ```
+     *
+     * JS unpacking:
+     * ```js
+     * const r = sim.step_with_gear_packed(dt, 2);
+     * const ok    = (r & 1) !== 0;
+     * const issue = (r >> 1) & 0x7f;
+     * const iters = r >>> 8;
+     * ```
+     *
+     * One wasm call, one number, no alloc, no `.free()`.  Functionally
+     * identical to `step_with_gear` — uses the exact same Rust step
+     * kernel underneath; only the return-value plumbing differs.
+     */
+    step_with_gear_packed(dt: number, gear: number): number;
+    /**
+     * Update the resistance of an existing resistor.  This is a low-latency
+     * operation that avoids full netlist reconstruction.
+     */
+    update_resistor(id: string, resistance_ohms: number): boolean;
+    /**
+     * Update the voltage of an existing voltage source.
+     */
+    update_voltage_source(id: string, voltage: number): boolean;
     /**
      * Voltage-source branch current by component id.  Returns 0.0 if the
      * component is unknown or the simulator hasn't been compiled/stepped.
@@ -187,7 +243,7 @@ export class Simulator {
  *
  * JS receives a number-typed handle that it threads back into
  * `numeric_factor` and `sparse_solve_in_place`.  The pattern data itself
- * lives in wasm linear memory and is never serialized across the boundary.
+ * lives in rust-e-sim-wasm linear memory and is never serialized across the boundary.
  */
 export class SparseLuPattern {
     private constructor();
@@ -200,7 +256,7 @@ export class SparseLuPattern {
 }
 
 /**
- * Outcome of a `step()` call, marshalled across the wasm boundary as a
+ * Outcome of a `step()` call, marshalled across the rust-e-sim-wasm boundary as a
  * small enum.  JS gets back either an iteration count (success) or a
  * negative error code.
  */
@@ -217,6 +273,10 @@ export class StepResult {
      * On success: Newton iteration count.  On failure: 0.
      */
     iters: number;
+    /**
+     * Estimated Local Truncation Error (LTE).
+     */
+    lte: number;
     ok: boolean;
 }
 
@@ -228,7 +288,7 @@ export class Transistor {
      * `undefined` on the JS side; defaults are applied inside the stamp
      * function to match the TS reference exactly.
      *
-     * `polarity_npn` is a boolean instead of a string because wasm-bindgen
+     * `polarity_npn` is a boolean instead of a string because rust-e-sim-wasm-bindgen
      * doesn't transparently marshal string enums.  JS adapter translates
      * `polarity === 'npn'` → `true`, `'pnp'` → `false`.
      */
@@ -293,12 +353,6 @@ export function minimumDegreeOrder(n: number, flat_edges: Int32Array): Int32Arra
 export function numericFactor(mat: Float64Array, n: number, pat: SparseLuPattern): boolean;
 
 /**
- * Smoke-test export — verifies the JS-WASM round-trip works.
- * Returns the input + 1.0.  Will be removed once the real API is in use.
- */
-export function ping(x: number): number;
-
-/**
  * Solve `(L * U) * x = rhs` using a matrix already factored by
  * `numeric_factor`.  The solution overwrites `rhs` on return.
  */
@@ -312,9 +366,11 @@ export interface InitOutput {
     readonly __wbg_diodestamp_free: (a: number, b: number) => void;
     readonly __wbg_get_stepresult_issue: (a: number) => number;
     readonly __wbg_get_stepresult_iters: (a: number) => number;
+    readonly __wbg_get_stepresult_lte: (a: number) => number;
     readonly __wbg_get_stepresult_ok: (a: number) => number;
     readonly __wbg_set_stepresult_issue: (a: number, b: number) => void;
     readonly __wbg_set_stepresult_iters: (a: number, b: number) => void;
+    readonly __wbg_set_stepresult_lte: (a: number, b: number) => void;
     readonly __wbg_set_stepresult_ok: (a: number, b: number) => void;
     readonly __wbg_simulator_free: (a: number, b: number) => void;
     readonly __wbg_sparselupattern_free: (a: number, b: number) => void;
@@ -330,7 +386,6 @@ export interface InitOutput {
     readonly diodestamp_ieq: (a: number) => number;
     readonly minimumDegreeOrder: (a: number, b: number, c: number) => [number, number];
     readonly numericFactor: (a: number, b: number, c: any, d: number, e: number) => number;
-    readonly ping: (a: number) => number;
     readonly simulator_add_capacitor: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
     readonly simulator_add_coupling: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly simulator_add_diode: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
@@ -350,6 +405,7 @@ export interface InitOutput {
     readonly simulator_export_prev_node_volts: (a: number) => [number, number];
     readonly simulator_export_relay_active: (a: number) => [number, number];
     readonly simulator_export_tj_cap_volts: (a: number) => [number, number];
+    readonly simulator_get_full_state: (a: number) => [number, number, number];
     readonly simulator_import_cap_volts: (a: number, b: number, c: number) => void;
     readonly simulator_import_gear2_ready: (a: number, b: number) => void;
     readonly simulator_import_inductor_currents: (a: number, b: number, c: number) => void;
@@ -364,9 +420,13 @@ export interface InitOutput {
     readonly simulator_new: (a: number) => number;
     readonly simulator_node_count: (a: number) => number;
     readonly simulator_node_voltage: (a: number, b: number) => number;
+    readonly simulator_set_full_state: (a: number, b: any) => [number, number];
     readonly simulator_solve_dc: (a: number) => number;
     readonly simulator_step: (a: number, b: number) => number;
     readonly simulator_step_with_gear: (a: number, b: number, c: number) => number;
+    readonly simulator_step_with_gear_packed: (a: number, b: number, c: number) => number;
+    readonly simulator_update_resistor: (a: number, b: number, c: number, d: number) => number;
+    readonly simulator_update_voltage_source: (a: number, b: number, c: number, d: number) => number;
     readonly simulator_voltage_source_current: (a: number, b: number, c: number) => number;
     readonly sparseSolveInPlace: (a: number, b: number, c: number, d: number, e: any, f: number, g: number) => void;
     readonly sparselupattern_n: (a: number) => number;
@@ -380,10 +440,13 @@ export interface InitOutput {
     readonly transistorstamp_iEqE: (a: number) => number;
     readonly transistorstamp_gBc: (a: number) => number;
     readonly transistorstamp_gBe: (a: number) => number;
-    readonly __wbindgen_externrefs: WebAssembly.Table;
     readonly __wbindgen_malloc: (a: number, b: number) => number;
-    readonly __wbindgen_free: (a: number, b: number, c: number) => void;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
+    readonly __wbindgen_exn_store: (a: number) => void;
+    readonly __externref_table_alloc: () => number;
+    readonly __wbindgen_externrefs: WebAssembly.Table;
+    readonly __wbindgen_free: (a: number, b: number, c: number) => void;
+    readonly __externref_table_dealloc: (a: number) => void;
     readonly __wbindgen_start: () => void;
 }
 
