@@ -100,9 +100,9 @@ const SPEAKER_CURRENT_SCALE = 100;
 //
 const SPEAKER_FILTER_DEFAULTS = Object.freeze({
     enabled: false,
-    f0: 2800,
-    Q:  10,
-    gain: 0.15,
+    f0: 2900,
+    Q:  1.3,
+    gain: 0.3,
 });
 
 // ── Solver constants ─────────────────────────────────────────────────────────
@@ -395,13 +395,14 @@ class SimRustProcessor extends AudioWorkletProcessor {
                         this.sim = buildSimulator(msg.netlist);
                         this.elementCount = msg.netlist?.elements?.length || 0;
                         if (this.sim) {
-                            this.sim.solve_dc();
+                            const dcOk = this.sim.solve_dc();
                             this.cacheSpeakerProbes(msg.netlist);
                             this.knownNodeIds = collectTopologyNodeIds(msg.netlist);
                             this.groundNodeId = msg.netlist.groundNodeId;
                             this.lastConfigureStatus = 'success';
                             console.log('[worklet] configure: simulator built with',
-                                msg.netlist?.elements?.length, 'elements, DC solved');
+                                msg.netlist?.elements?.length, 'elements, DC',
+                                dcOk ? 'converged' : 'DID NOT CONVERGE (transient runs from partial state)');
                         } else {
                             this.lastConfigureStatus = 'failed_null_sim';
                             console.warn('[worklet] configure: buildSimulator returned null (empty/invalid netlist)');

@@ -115,6 +115,12 @@
 
 	// ── Audio ─────────────────────────────────────────────────────────────────
 	let speakerAudioEnabled = $state(false);
+	// Speaker mechanical-resonance bandpass — off by default so it doesn't
+	// colour circuits whose tone isn't near the resonance (e.g. the
+	// metronome's ~400 Hz tick).  Toggle on for siren / tone circuits (P18,
+	// P45) where it converts the simulator's spike-train output into a clean
+	// tone near the speaker's resonant frequency.
+	let speakerFilterOn = $state(false);
 	let audioContext: AudioContext | null = null;
 	let audioMasterGain: GainNode | null = null;
 	let audioHighpass: BiquadFilterNode | null = null;
@@ -666,6 +672,18 @@
 			title="Records 5 seconds of the worklet's internal audio chain (raw simulator output, post-DC-block, post-tanh) and downloads three WAV files for offline analysis."
 		>
 			Capture 5s diagnostic
+		</button>
+		<button
+			class="clear-btn"
+			class:running={speakerFilterOn}
+			onclick={() => {
+				speakerFilterOn = !speakerFilterOn;
+				workletHost?.setSpeakerFilter({ enabled: speakerFilterOn });
+			}}
+			disabled={!workletHost}
+			title="Speaker mechanical-resonance bandpass (~2.8 kHz). Converts the spike-train output of oscillator circuits (P18 siren, P45 tone) into a clean tone. Leave OFF for the metronome and other low-frequency circuits. Fine-tune from the console via workletHost.setSpeakerFilter with f0, Q, and gain options."
+		>
+			Speaker resonance: {speakerFilterOn ? 'on' : 'off'}
 		</button>
 	</div>
 

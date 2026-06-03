@@ -5,8 +5,13 @@ const model2SB56: DeviceModel = {
 	type: 'bjt',
 	params: {
 		polarity: 'pnp',
-		bf:  100,
-		is:  10e-6,
+		// Calibrated to a real device on a TC1 component tester:
+		//   hfe = 77.9 @ Ic=1mA      -> bf  = 78
+		//   Vbe = 81mV  @ Ic=1mA     -> is  = Ic/exp(Vbe/Vt) ~ 44uA (germanium: low Vbe, high is)
+		//   Ices = 8uA               -> matches is/br = 44u/5 = 8.8uA (BC leakage), so br=5 holds
+		//   Iceo = 0.19mA            -> (bf+1)*Icbo, consistent with the above
+		bf:  78,
+		is:  44e-6,
 		br:  5,
 		vaf: 40,
 		var: 50,
@@ -37,8 +42,12 @@ const modelJS711: DeviceModel = {
 	type: 'bjt',
 	params: {
 		polarity: 'npn',
-		bf:  300,
-		is:  1.0e-13,
+		// Calibrated to a real device on a TC1 component tester:
+		//   hfe = 34.2 @ Ie=0.28mA   -> bf  = 34  (low-gain part; was an assumed 300)
+		//   Vbe = 650mV @ Ie=0.28mA  -> Ic~0.272mA, is = Ic/exp(Vbe/Vt) ~ 3.3e-15 (silicon)
+		// NOTE: shared with P45 (Q3).  bf 300->34 is a large change; verify P45.
+		bf:  34,
+		is:  3.3e-15,
 		br:  2,
 		vaf: 60,
 		var: 50,
