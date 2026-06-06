@@ -42,12 +42,17 @@ const modelJS711: DeviceModel = {
 	type: 'bjt',
 	params: {
 		polarity: 'npn',
-		// Calibrated to a real device on a TC1 component tester:
-		//   hfe = 34.2 @ Ie=0.28mA   -> bf  = 34  (low-gain part; was an assumed 300)
-		//   Vbe = 650mV @ Ie=0.28mA  -> Ic~0.272mA, is = Ic/exp(Vbe/Vt) ~ 3.3e-15 (silicon)
-		// NOTE: shared with P45 (Q3).  bf 300->34 is a large change; verify P45.
-		bf:  34,
-		is:  3.3e-15,
+		// REVERTED to known-good values — P45 (which shares this Q3) breaks with
+		// the TC1-measured params.  The measured device reads hfe=34 @0.28mA and
+		// Vbe=650mV (is~3.3e-15), but:
+		//   - that higher turn-on threshold disrupts our P45 oscillator (dropouts),
+		//   - and matching the low-current hfe via droop starves P45's gain at the
+		//     higher current it runs at.
+		// The real P45 tolerates the real device, so this is a P45-MODEL fidelity
+		// gap (transformer/bias), not a device-param problem.  Revisit once the
+		// P45 transformer is modeled in the bench.  P18 uses the speaker filter.
+		bf:  300,
+		is:  1.0e-13,
 		br:  2,
 		vaf: 60,
 		var: 50,
