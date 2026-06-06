@@ -67,7 +67,14 @@ import init,  {
 // These mirror static/audio/speaker-worklet.js so Phase 4 audio sounds
 // indistinguishable from Phase 3 audio (modulo the actual simulator output).
 
-const AUDIO_SCALE     = 3;       // tanh knee (V)
+const AUDIO_SCALE     = 16;      // tanh knee (V) — higher = softer "rounded"
+                                 // clipping. At 3 the spike train slammed the
+                                 // tanh into hard saturation (~22% of samples
+                                 // flat-topped → harsh).  16 keeps the spikes
+                                 // in tanh's soft knee so the peaks round
+                                 // instead of clip flat, full bandwidth (no
+                                 // low-pass, edges/brightness preserved).
+                                 // Tradeoff: ~4.6 dB quieter than 3.
 const DC_BLOCK_R      = 0.995;   // DC-blocker coefficient (HPF ~1.5 Hz @ 48 kHz)
 const FADE_IN_SAMPLES = 256;     // ~6 ms ramp on first connect
 // Scale factor for the 'current' audio probe.  SPK1 voice-coil current
