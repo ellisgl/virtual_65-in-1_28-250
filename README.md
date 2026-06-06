@@ -1,10 +1,11 @@
 # Virtual Science Fair 65 In 1 Electronic Project Kit (Cat# 28-250)
 
 A web-based simulator inspired by the classic Radio Shack spring-terminal electronics kit.
+(Yes, this is a test of vibe coding)
 
 ## Status
 
-Work in progress. The current focus is building the board data layer and interactive wiring POC.
+Work in progress. 
 
 ## Requirements
 
