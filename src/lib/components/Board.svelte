@@ -7,6 +7,7 @@
 	import { formatCapacitance, formatPotPosition, voltageToColor } from '$lib/components/board/helpers';
 	import KeySwitchOverlay from '$lib/components/board/KeySwitchOverlay.svelte';
 	import LampGlowOverlay from '$lib/components/board/LampGlowOverlay.svelte';
+	import RelayStateOverlay from '$lib/components/board/RelayStateOverlay.svelte';
 	import VoltmeterOverlay from '$lib/components/board/VoltmeterOverlay.svelte';
 	import { buildSimulationNetlist } from '$lib/sim';
 	import { initRustDc, isRustDcReady, solveDcRust } from '$lib/sim/dc-rust';
@@ -24,6 +25,7 @@
 	const VARIABLE_CAPACITOR_COMPONENT = KIT_COMPONENTS.find((component) => component.id === 'VC1');
 	const KEY_COMPONENT = KIT_COMPONENTS.find((component) => component.id === 'KEY1');
 	const VOLTMETER_COMPONENT = KIT_COMPONENTS.find((component) => component.id === 'VM1');
+	const RELAY_COMPONENT = KIT_COMPONENTS.find((component) => component.id === 'RL1');
 	const BOARD_VIEWBOX_WIDTH = 437;
 	const BOARD_VIEWBOX_HEIGHT = 267;
 	const METER_NEEDLE_MIN_ANGLE = -78;
@@ -219,6 +221,30 @@
 	let meterNeedleAngle = $derived(
 		METER_NEEDLE_MIN_ANGLE +
 			(meterClampedVolts / 10) * (METER_NEEDLE_MAX_ANGLE - METER_NEEDLE_MIN_ANGLE)
+	);
+	let relayEnergized = $derived(
+		(() => {
+			const meta = RELAY_COMPONENT?.metadata;
+			const params = RELAY_COMPONENT?.model?.params;
+			const coilPos =
+				typeof meta?.coilPositive === 'number' ? meta.coilPositive : RELAY_COMPONENT?.terminals?.[0];
+			const coilNeg =
+				typeof meta?.coilNegative === 'number' ? meta.coilNegative : RELAY_COMPONENT?.terminals?.[1];
+			if (typeof coilPos !== 'number' || typeof coilNeg !== 'number') return false;
+			const posNode = topology.terminalToNode[coilPos];
+			const negNode = topology.terminalToNode[coilNeg];
+			if (typeof posNode !== 'number' || typeof negNode !== 'number') return false;
+			const vp = activeNodeVoltages[posNode];
+			const vn = activeNodeVoltages[negNode];
+			if (typeof vp !== 'number' || typeof vn !== 'number') return false;
+			// Coil current through the DC coil resistance vs the pull-in current.
+			// (At DC the 1.12 H coil is a short, so I_coil = V_coil / R_coil.)
+			const rCoil =
+				typeof params?.coilResistanceOhms === 'number' ? params.coilResistanceOhms : 150;
+			const onCurrent = typeof params?.onCurrent === 'number' ? params.onCurrent : 0.02;
+			const coilCurrent = Math.abs(vp - vn) / rCoil;
+			return coilCurrent >= onCurrent;
+		})()
 	);
 	let lampGlowOpacity = $derived(
 		(() => {
@@ -758,6 +784,10 @@
 
 			{#if VOLTMETER_COMPONENT}
 				<VoltmeterOverlay needleAngle={meterNeedleAngle} />
+			{/if}
+
+			{#if RELAY_COMPONENT}
+				<RelayStateOverlay energized={relayEnergized} />
 			{/if}
 
 			{#each mappedTerminalIds as id (id)}
