@@ -1,4 +1,12 @@
 <script lang="ts">
+	/**
+	 * Interactive Morse-key overlay.  Rendered inside Board.svelte's overlay
+	 * <svg viewBox="0 0 437 267"> stacked over the static board image, so all
+	 * coordinates are in board.svg space.  `hitbox` and `center` are supplied
+	 * by Board.svelte (traced from the key artwork).  Pointer + keyboard
+	 * (Space/Enter) both drive `onPressedChange`; pointer capture keeps a
+	 * press alive if the cursor slides off the key before release.
+	 */
 	interface Props {
 		pressed: boolean;
 		hitbox: { x1: number; y1: number; x2: number; y2: number };

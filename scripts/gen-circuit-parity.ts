@@ -7,7 +7,7 @@
  * port then builds the same circuit, runs the same steps, and asserts
  * every sampled state matches to within 1e-9.
  *
- * Scope (Phase 3a): RC and RLC circuits — no BJT/diode, because cold-
+ * Scope (Phase 3a): RC and RLC circuits — no BJT/diode, because cold
  * start of nonlinear elements requires the DC operating-point solve that
  * Phase 3b ports.  The BJT and diode stamps themselves are independently
  * parity-tested in tests/parity_stamps.rs.

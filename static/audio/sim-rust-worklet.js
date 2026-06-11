@@ -1,38 +1,44 @@
 /* eslint-disable */
 /**
- * sim-rust-worklet.js — Phase 4 audio worklet that hosts the Rust simulator
- *                       directly in the audio thread.
+ * sim-rust-worklet.js — audio worklet that hosts the Rust circuit simulator
+ *                       directly on the audio thread.
  *
- * Pipeline (compared to the Phase 3 worker+ring-buffer architecture):
+ * Each process() call steps the simulator far enough to fill one render
+ * quantum (128 samples ≈ 2.7 ms @ 48 kHz) and writes the speaker signal
+ * straight to the output — no ring buffer and no postMessage on the audio
+ * path.  (An earlier architecture ran the sim in a Web Worker and shipped
+ * batches through a ring-buffer worklet; this design replaced it.)
  *
- *   Phase 3:  Web Worker → main thread → speaker-worklet ring buffer → output
- *              ~4 ms tick batches    postMessage   cubic-interpolated readout
+ * Message protocol, main thread → worklet (via .port):
  *
- *   Phase 4:  this worklet → output
- *              one quantum (128 samples = ~2.7 ms @ 48 kHz) per process() call
- *              no buffering, no postMessage on the audio path
- *
- * Lifecycle / message protocol (driven from the main thread via .port):
- *
- *   { type: 'init',         wasmModule }    one-time WASM instantiation
- *   { type: 'configure',    netlist, kick } build Simulator, solve DC, start cold
- *   { type: 'updateControls', netlist }     hot-recompile preserving state when possible
- *   { type: 'start' }                       allow process() to advance the sim
- *   { type: 'stop' }                        freeze; output silence
+ *   { type: 'init', wasmModule }            ready-handshake (WASM itself is
+ *                                           mounted in the constructor — see
+ *                                           the note above the class)
+ *   { type: 'configure', netlist, audioProbe } build simulator, solve DC
+ *   { type: 'updateControls', netlist }     hot-recompile, preserving
+ *                                           transient state when possible
+ *   { type: 'audioProbe', probe }           'voltage' | 'current'
+ *   { type: 'setSpeakerFilter', ... }       tune/enable the resonance BPF
+ *   { type: 'startDiagnosticCapture', seconds } arm a 4-channel capture
+ *   { type: 'ping' }                        keep-alive (Chrome throttling)
+ *   { type: 'start' } / { type: 'stop' }    let process() advance / freeze
  *
  * Worklet → main thread:
  *
- *   { type: 'ready' }                       sent after init() resolves
+ *   { type: 'ready' }                       init handshake reply
  *   { type: 'snapshot', nodeVoltages }      ~30 fps for UI rendering
- *   { type: 'error', error }                catastrophic failure (post + exit gracefully)
+ *   { type: 'alive' }                       once, on the first process() call
+ *   { type: 'debug', state }                verbose state (debug mode only)
+ *   { type: 'error', error }                catastrophic failure
+ *   { type: 'diagnosticCaptureStarted' } / { type: 'diagnosticCapture', ... }
+ *   { type: 'speakerFilterUpdated', ... }   echo of applied filter settings
  *
  * Worklets cannot fetch.  AudioWorkletGlobalScope omits fetch / XHR / dynamic
- * import for network.  The main thread compiles the .wasm to a WebAssembly.Module
- * and ships it via postMessage (Modules are structured-cloneable), and we
- * pass it to wasm-bindgen's init() which accepts a precompiled module.
+ * import, so the main thread compiles the .wasm to a WebAssembly.Module and
+ * hands it over in processorOptions (Modules are structured-cloneable).
  *
- * The wasm-bindgen JS glue must be present as a sibling file (`./sim_wasm.js`).
- * The Rust build process (in the rust-e-sim repo) copies it into /static/audio/ alongside this worklet.
+ * The wasm-bindgen JS glue must be present as a sibling file (`./sim_wasm.js`);
+ * build-wasm.sh copies it into /static/audio/ alongside this worklet.
  */
 
 // ── WASM glue ────────────────────────────────────────────────────────────────
@@ -51,11 +57,6 @@
 // Dynamic `await import()` would be cleaner (run polyfill code first in
 // the same file) but is disallowed in WorkletGlobalScope — hence the
 // two-file approach.
-// import init, {
-//     Simulator as WasmSimulator,
-//     Diode as WasmDiode,
-//     Transistor as WasmTransistor,
-// } from './sim_wasm.js';
 import init,  {
     initSync,
     Simulator as WasmSimulator,
@@ -64,8 +65,7 @@ import init,  {
 } from './sim_wasm.js';
 
 // ── Audio post-processing constants ──────────────────────────────────────────
-// These mirror static/audio/speaker-worklet.js so Phase 4 audio sounds
-// indistinguishable from Phase 3 audio (modulo the actual simulator output).
+// The emit chain per sample is:  probe → DC block → [resonance BPF] → tanh.
 
 const AUDIO_SCALE     = 16;      // tanh knee (V) — higher = softer "rounded"
                                  // clipping. At 3 the spike train slammed the
@@ -87,23 +87,25 @@ const SPEAKER_CURRENT_SCALE = 100;
 // ── Speaker mechanical-resonance bandpass ────────────────────────────────────
 // Real small speakers have a strong mechanical resonance that turns the
 // spike-train output of the BJT regenerative oscillator into a continuous
-// tone at the cone's natural frequency.  Our SPK1 model is purely
-// electrical (Rvc + Lvc), so spikes pass through verbatim and produce the
-// "zipper" / "clicks" you hear at the spike rate (~840 Hz on P18).
+// tone near the cone's natural frequency.  Our SPK1 model is purely
+// electrical (Rvc + Lvc), so spikes pass through verbatim and can sound
+// "zippery" / clicky at the spike rate.
 //
-// This biquad bandpass filter (Audio EQ Cookbook, "BPF constant 0 dB peak
-// gain") sits between the DC blocker and the tanh saturator, simulating the
-// cone's resonant response.  Default values target the real-kit P18 siren's
-// observed audible pitch (~2.8 kHz).  Runtime-adjustable via the
-// 'setSpeakerFilter' worklet message.
+// This biquad bandpass (Audio EQ Cookbook, "BPF constant 0 dB peak gain")
+// sits between the DC blocker and the tanh saturator to approximate the
+// cone's response.  OFF by default: it recolors the signal toward f0,
+// which suits siren/tone circuits (P18, P45) but would wrongly color
+// e.g. the metronome's sharp ticks.  Board.svelte exposes the toggle;
+// everything is runtime-adjustable via the 'setSpeakerFilter' message.
 //
-//   f0   center frequency (Hz)
-//   Q    quality factor — ringing time ≈ Q / (π·f0); for Q=10 at 2800 Hz
-//        the ring lasts ~1.1 ms, just long enough to bridge the gap between
-//        the simulator's ~840 Hz spikes (1.2 ms spike interval).
-//   gain post-filter scalar — brings the filter's natural output amplitude
-//        into the tanh's linear region.  Lower = cleaner sine, higher = more
-//        gentle saturation harmonics.
+//   f0   center frequency (Hz); 2900 matches the real kit speaker's
+//        measured resonance.
+//   Q    quality factor (ringing time ≈ Q / (π·f0)).  Deliberately broad
+//        (1.3): a sharp Q pins any swept tone to f0, flattening the
+//        siren's pitch sweep — broad keeps the sweep audible at the cost
+//        of weaker spike smoothing.
+//   gain post-filter scalar — keeps the BPF's output in the tanh's soft
+//        region.  Lower = cleaner, higher = more saturation harmonics.
 //
 const SPEAKER_FILTER_DEFAULTS = Object.freeze({
     enabled: false,
@@ -113,9 +115,12 @@ const SPEAKER_FILTER_DEFAULTS = Object.freeze({
 });
 
 // ── Solver constants ─────────────────────────────────────────────────────────
+// Adaptive timestep bounds: process() grows dt (×1.2) while Newton converges
+// quickly and shrinks it (×0.5) when iterations climb; failures retry at
+// DT_MIN with backward Euler.  20 µs max keeps ≥2 sim steps per 48 kHz
+// audio sample.
 
 const DT_MIN    = 1e-6;
-//const DT_MAX    = 0.5e-3;
 const DT_MAX    = 20e-6;
 const DT_INIT   = 10e-6;
 

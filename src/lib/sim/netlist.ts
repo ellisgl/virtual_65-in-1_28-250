@@ -220,6 +220,46 @@ export function buildSimulationNetlist(
 			});
 			continue;
 		}
+		
+		if (component.kind === 'solar-cell') {
+			// Solar cell.  Outputs a voltage up to 0.5V depending on light level.
+			const maxVoltage = asNumber(valueOverrides[component.id] ?? component.value) ?? 0.5;
+			const position = clamp(
+				asNumber(positionOverrides[component.id] ?? component.metadata?.defaultPosition) ?? 0.5,
+				0,
+				1
+			);
+
+			const positiveTerminal = asNumber(component.metadata?.positive);
+			const negativeTerminal = asNumber(component.metadata?.negative);
+			const positiveNode = positiveTerminal === null ? undefined : topology.terminalToNode[positiveTerminal];
+			const negativeNode = negativeTerminal === null ? undefined : topology.terminalToNode[negativeTerminal];
+
+			if (typeof positiveNode !== 'number' || typeof negativeNode !== 'number') {
+				unsupported.push({
+					componentId: component.id,
+					kind: component.kind,
+					reason: 'Solar cell terminals are missing topology node bindings'
+				});
+				continue;
+			}
+
+			if (!connectedNodeSet.has(positiveNode) && !connectedNodeSet.has(negativeNode)) {
+				continue;
+			}
+
+			// Linear output: 0 at dark (0), max at bright (1).
+			const voltage = maxVoltage * position;
+
+			elements.push({
+				type: 'voltage-source',
+				componentId: component.id,
+				positiveNode,
+				negativeNode,
+				voltage
+			});
+			continue;
+		}
 
 		if (component.kind === 'potentiometer') {
 			const totalResistanceOhms = asNumber(valueOverrides[component.id] ?? component.value);

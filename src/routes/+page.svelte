@@ -8,7 +8,7 @@
 
 <style>
 	main {
-		padding: 1rem;
+		padding: 0 1rem 1rem;
 		display: grid;
 		gap: 1rem;
 	}

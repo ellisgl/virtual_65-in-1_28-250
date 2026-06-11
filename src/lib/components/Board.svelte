@@ -14,6 +14,7 @@
 	import { SimRustWorkletHost } from '$lib/sim/sim-rust-worklet-host';
 	import type { ControlState, WireSpec, DiagnosticCapture } from '$lib/sim/sim-rust-worklet-host';
 	import { wiresStore } from '$lib/stores/wires.svelte';
+	import { playRelayClick } from '$lib/audio/relay-click';
 	import type { DcSolution } from '$lib/types';
 
 	const mappedTerminalIds = KIT_TERMINAL_IDS.filter((id) => isTerminalPositionMapped(id));
@@ -59,6 +60,7 @@
 	let topology = $derived(wiresStore.topology);
 	let variableResistancePosition = $state(variableResDefaultPosition);
 	let variableCapacitance = $state(variableCapDefault);
+	let ambientLight = $state(0.5);
 	let switchStates = $state<Record<string, boolean>>({});
 
 	// ── Controls helper ────────────────────────────────────────────────────────
@@ -67,7 +69,11 @@
 		// and $effects see a consistent view.
 		return {
 			valueOverrides:    VARIABLE_CAPACITOR_COMPONENT ? { VC1: variableCapacitance } : {},
-			positionOverrides: VARIABLE_RESISTOR_COMPONENT  ? { VR1: variableResistancePosition } : {},
+			positionOverrides: {
+				...(VARIABLE_RESISTOR_COMPONENT ? { VR1: variableResistancePosition } : {}),
+				LDR1: ambientLight,
+				SOLAR1: ambientLight
+			},
 			switchStates:      { ...switchStates }
 		};
 	}
@@ -106,10 +112,10 @@
 	);
 
 	// ── Audio worklet host (runs sim in the audio thread) ─────────────────────
-	// Replaces the Phase 3 Web Worker + speaker-worklet ring buffer pipeline.
 	// The worklet host instantiates an AudioWorkletNode that hosts the Rust
 	// simulator directly: process() steps the sim and emits audio samples in
-	// one shot.  Snapshots come back over the port for UI updates.
+	// one shot — no ring buffer, no main-thread hop on the audio path.
+	// Snapshots come back over the port for UI updates.
 	let workletHost = $state<SimRustWorkletHost | null>(null);
 	let lastHandledResetKey = $state<string | null>(null);
 	let workletVoltages = $state<Record<number, number>>({});
@@ -246,6 +252,23 @@
 			return coilCurrent >= onCurrent;
 		})()
 	);
+
+	// Mechanical click on relay state transitions.  `prevRelayEnergized`
+	// starts null so the initial derivation (page load / wiring changes
+	// settling) doesn't click — only genuine on↔off transitions do.
+	// Clicks need the AudioContext, so they're audible only while speaker
+	// audio is enabled; playRelayClick itself rate-limits fast oscillations.
+	let prevRelayEnergized: boolean | null = null;
+	$effect(() => {
+		const energized = relayEnergized;
+		if (prevRelayEnergized === null) {
+			prevRelayEnergized = energized;
+			return;
+		}
+		if (energized === prevRelayEnergized) return;
+		prevRelayEnergized = energized;
+		if (audioContext) playRelayClick(audioContext, energized);
+	});
 	let lampGlowOpacity = $derived(
 		(() => {
 			const normalized = Math.max(0, Math.min(1, lampPowerRatio));
@@ -322,11 +345,14 @@
 
 		audioContext = new AudioContext();
 		audioMasterGain = audioContext.createGain();
-		// 1.0 not 0.25: the worklet's chain (tanh + bandpass + bpGain)
-		// already attenuates significantly (~-20 dB at the siren's typical
-		// 1 kHz against the 250 Hz-centred cone bandpass).  Stacking
-		// another -12 dB makes the siren barely audible.  tanh saturation
-		// prevents clipping so we don't need master-side headroom.
+		// Master make-up gain.  The worklet's tanh stage bounds its output to
+		// ±1 and, at the current AUDIO_SCALE, typical circuit levels sit well
+		// below that, so >1 here restores loudness.  CAVEAT: with ×4, any
+		// worklet sample above ±0.25 hard-clips at the destination — sharp
+		// spike peaks (e.g. P18's) will flat-top again despite the worklet's
+		// soft clipping.  Lower this (or raise it with care) when tuning the
+		// loudness/harshness trade-off; the 25 Hz highpass below only strips
+		// DC and rumble.
 		audioMasterGain.gain.value = 4.0;
 		audioHighpass  = audioContext.createBiquadFilter();
 		audioHighpass.type = 'highpass';
@@ -341,8 +367,8 @@
 			host.onError    = (msg)   => {
 				console.error('[worklet] sim failure:', msg);
 				if (msg.includes('topology node bindings')) {
-					// Surface component binding errors to the UI if possible.
-					// For now just log more visibly.
+					// TODO: surface component-binding errors in the UI; for now
+					// they only get a more visible console warning.
 					console.warn('[worklet] Check component connections!');
 				}
 			};
@@ -591,18 +617,25 @@
 	function handleDragStart(terminalId: number, e: PointerEvent) {
 		const pos = TERMINAL_POSITIONS[terminalId];
 		if (!pos) return;
-		wiresStore.startDrag(terminalId, pos.x, pos.y);
-		overlaySvg.setPointerCapture(e.pointerId);
+		
+		// Always update audio state on first interaction
 		if (!speakerAudioEnabled) {
 			speakerAudioEnabled = true;
 			void startSpeakerAudio();
 		}
+
+		if (wiresStore.drag.active) {
+			// If already active, this is the second click
+			wiresStore.complete(terminalId);
+		} else {
+			// Start new wire
+			wiresStore.startDrag(terminalId, pos.x, pos.y);
+			// We don't capture pointer because we want to move freely
+		}
 	}
 
-	function handleConnect(terminalId: number) {
-		if (wiresStore.drag.active) {
-			wiresStore.complete(terminalId);
-		}
+	function handleRemoveTerminalWires(terminalId: number) {
+		wiresStore.removeByTerminal(terminalId);
 	}
 
 	function handlePointerMove(e: PointerEvent) {
@@ -624,25 +657,23 @@
 		}
 		return nearestId;
 	}
-
-	function handlePointerUp(e: PointerEvent) {
-		if (!wiresStore.drag.active) return;
-		const { x, y } = toSvgCoords(e);
-		const terminalId = findNearestTerminal(x, y);
-		if (terminalId !== null) {
-			wiresStore.complete(terminalId);
-		} else {
-			wiresStore.cancel();
-		}
-		if (overlaySvg.hasPointerCapture(e.pointerId)) {
-			overlaySvg.releasePointerCapture(e.pointerId);
-		}
-	}
-
-	function handleRemoveTerminalWires(terminalId: number) {
-		wiresStore.removeByTerminal(terminalId);
-	}
 	let processingRunClick = false;
+
+	function handlePointerDown(e: PointerEvent) {
+		// If wiring is active, clicking the background should add a shaping point.
+		// Right click (button 2) cancels wiring.
+		if (wiresStore.drag.active) {
+			if (e.button === 2) {
+				wiresStore.cancel();
+				return;
+			}
+			const { x, y } = toSvgCoords(e);
+			const terminalId = findNearestTerminal(x, y);
+			if (terminalId === null) {
+				wiresStore.addShapingPoint(x, y);
+			}
+		}
+	}
 </script>
 
 <section class="board-shell">
@@ -695,6 +726,7 @@
 			class="clear-btn"
 			onclick={() => workletHost?.startDiagnosticCapture(5.0)}
 			disabled={!workletHost || !transientRunning}
+			style="white-space: normal; line-height: 1.2;"
 			title="Records 5 seconds of the worklet's internal audio chain (raw simulator output, post-DC-block, post-tanh) and downloads three WAV files for offline analysis."
 		>
 			Capture 5s diagnostic
@@ -707,10 +739,23 @@
 				workletHost?.setSpeakerFilter({ enabled: speakerFilterOn });
 			}}
 			disabled={!workletHost}
+			style="white-space: normal; line-height: 1.2;"
 			title="Speaker mechanical-resonance bandpass (~2.8 kHz). Converts the spike-train output of oscillator circuits (P18 siren, P45 tone) into a clean tone. Leave OFF for the metronome and other low-frequency circuits. Fine-tune from the console via workletHost.setSpeakerFilter with f0, Q, and gain options."
 		>
 			Speaker resonance: {speakerFilterOn ? 'on' : 'off'}
 		</button>
+
+		<div class="light-control">
+			<label for="ambient-light">Light level: {Math.round(ambientLight * 100)}%</label>
+			<input
+				id="ambient-light"
+				type="range"
+				min="0"
+				max="1"
+				step="0.01"
+				bind:value={ambientLight}
+			/>
+		</div>
 	</div>
 
 	<div class="board-container">
@@ -722,15 +767,9 @@
 			aria-label="Kit board wiring area"
 			bind:this={overlaySvg}
 			onpointermove={handlePointerMove}
-			onpointerup={handlePointerUp}
+			onpointerdown={handlePointerDown}
 		>
 			<rect width={BOARD_VIEWBOX_WIDTH} height={BOARD_VIEWBOX_HEIGHT} fill="transparent" />
-
-			<WiringLayer
-				wires={wiresStore.wires}
-				drag={wiresStore.drag}
-				onRemoveWire={(id) => wiresStore.removeWire(id)}
-			/>
 
 			<BoardControlKnobs
 				capacitor={
@@ -801,25 +840,35 @@
 					voltageColor={voltageToColor(voltage)}
 					isDragSource={wiresStore.drag.fromTerminal === id}
 					onDragStart={handleDragStart}
-					onConnect={handleConnect}
 					onRemove={handleRemoveTerminalWires}
 				/>
 			{/each}
+
+			<WiringLayer
+				wires={wiresStore.wires}
+				drag={wiresStore.drag}
+				onRemoveWire={(id) => wiresStore.removeWire(id)}
+			/>
 		</svg>
 	</div>
 </section>
 
 <style>
 	.board-shell {
-		display: grid;
+		display: flex;
+		flex-direction: row;
+		align-items: flex-start;
 		gap: 0.5rem;
 	}
 
 	.toolbar {
 		display: flex;
-		align-items: center;
-		gap: 1rem;
-		flex-wrap: wrap;
+		flex-direction: column;
+		align-items: stretch;
+		gap: 0.5rem;
+		order: 2;
+		width: 200px;
+		flex-shrink: 0;
 	}
 
 	.run-btn {
@@ -878,10 +927,33 @@
 		cursor: default;
 	}
 
+	.light-control {
+		margin-top: 1rem;
+		display: flex;
+		flex-direction: column;
+		gap: 0.25rem;
+		padding: 0.5rem;
+		background: #222;
+		border-radius: 4px;
+		border: 1px solid #444;
+	}
+
+	.light-control label {
+		font-size: 0.75rem;
+		color: #aaa;
+		text-align: center;
+		font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+	}
+
+	.light-control input[type='range'] {
+		width: 100%;
+		cursor: pointer;
+	}
+
 	.board-container {
 		position: relative;
-		width: 100%;
-		max-width: 1100px;
+		flex: 1;
+		min-width: 0;
 		border: 1px solid #2c2c2c;
 		border-radius: 10px;
 		overflow: hidden;

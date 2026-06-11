@@ -16,6 +16,7 @@ export type ComponentKind =
 	| 'antenna'
 	| 'switch'
 	| 'cds'
+	| 'solar-cell'
 	| 'voltmeter';
 
 export type DeviceModelType = 'diode' | 'bjt' | 'scr' | 'relay' | 'lamp';
@@ -47,6 +48,10 @@ export interface Wire {
 	fromTerminal: number;
 	toTerminal: number;
 	color: string;
+	lengthCm: number;
+	/** Optional points for shaping the wire.
+	 *  If provided, the wire will be drawn as a poly-bezier passing through or influenced by these points. */
+	shapingPoints?: Array<{ x: number; y: number }>;
 }
 
 export interface DragState {
@@ -54,6 +59,7 @@ export interface DragState {
 	fromTerminal: number | null;
 	currentX: number;
 	currentY: number;
+	shapingPoints: Array<{ x: number; y: number }>;
 }
 
 export interface CircuitNode {
@@ -303,7 +309,7 @@ export interface CompiledNetlist {
 	transformerElements: SimulationTransformerElement[];
 	inductorElements: SimulationInductorElement[];
 	transistorElements: SimulationTransistorElement[];
-	/** Diode elements (Shockley model + optional Zener breakdown). Stamped per Newton iteration. */
+	/** Diode elements (Shockley model and optional Zener breakdown). Stamped per Newton iteration. */
 	diodeElements: SimulationDiodeElement[];
 	/**
 	 * Symbolic LU pattern covering every position that any stamp (static or dynamic)
@@ -402,7 +408,7 @@ export interface TransientState {
 	 */
 	prevDt:       number;
 	/**
-	 * Exponentially-weighted moving average of the Newton iteration count.
+	 * Exponentially weighted moving average of the Newton iteration count.
 	 * α = 0.3, so it tracks recent behaviour without overreacting to single spikes.
 	 * Used to set an adaptive ceiling on the next step's iteration budget.
 	 */

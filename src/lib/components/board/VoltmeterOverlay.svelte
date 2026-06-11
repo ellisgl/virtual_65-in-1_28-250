@@ -1,4 +1,11 @@
 <script lang="ts">
+	/**
+	 * Voltmeter dial drawn over the meter footprint in the board artwork
+	 * (coordinates in board.svg space; the transform recenters + enlarges the
+	 * dial around METER_DIAL_CENTER).  `needleAngle` is degrees from vertical,
+	 * −45° (0 V) … +45° (10 V), computed by Board.svelte from the probed
+	 * terminal voltage.
+	 */
 	interface Props {
 		needleAngle: number;
 	}

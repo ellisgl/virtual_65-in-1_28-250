@@ -34,23 +34,21 @@ const model2SB56: DeviceModel = {
 	}
 };
 
-// I think the JS711-11 is a 2SC711 in a different package.
-// Which the modern equivalent is the 2N3707
-// I found enough specs to create a spice model
+// The JS711-11 is believed to be a 2SC711 in a different package (modern
+// equivalent: 2N3707); the model parameters below were built from those specs.
 const modelJS711: DeviceModel = {
 	name: 'S711',
 	type: 'bjt',
 	params: {
 		polarity: 'npn',
-		// REVERTED to known-good values — P45 (which shares this Q3) breaks with
-		// the TC1-measured params.  The measured device reads hfe=34 @0.28mA and
-		// Vbe=650mV (is~3.3e-15), but:
-		//   - that higher turn-on threshold disrupts our P45 oscillator (dropouts),
-		//   - and matching the low-current hfe via droop starves P45's gain at the
-		//     higher current it runs at.
-		// The real P45 tolerates the real device, so this is a P45-MODEL fidelity
-		// gap (transformer/bias), not a device-param problem.  Revisit once the
-		// P45 transformer is modeled in the bench.  P18 uses the speaker filter.
+		// NOTE: deliberately NOT the TC1-measured values.  A real JS711 read
+		// hfe=34 @ 0.28mA with Vbe=650mV (is ≈ 3.3e-15), but installing those
+		// params breaks the P45 oscillator (which shares this Q3): the higher
+		// turn-on threshold causes dropouts, and matching the measured
+		// low-current gain starves P45 at its higher operating current.  The
+		// real P45 runs the real device fine, so the gap is in our P45 model
+		// (LT700 transformer + bias), not in these parameters.  Don't
+		// re-calibrate from measurements until that transformer is modeled.
 		bf:  300,
 		is:  1.0e-13,
 		br:  2,
@@ -75,6 +73,9 @@ const modelJS711: DeviceModel = {
 	}
 };
 
+// Reference: the SPICE subcircuit these SCR params were derived from
+// (an SCR is modeled as a cross-coupled PNP/NPN pair):
+//
 // * C103Y SCR Subcircuit (30V, 0.8A)
 // * Terminals: Anode Gate Cathode
 // .SUBCKT C103Y 1 2 3
@@ -229,7 +230,11 @@ const activeDevices: KitComponent[] = [
 ];
 
 /*
-* LT700 Audio Output Transformer
+ * Reference: the SPICE subcircuit T1's transformer parameters were derived
+ * from.  Not yet simulated as coupled inductors — see the T1 entry below for
+ * how the app currently approximates it.
+ *
+ * LT700 Audio Output Transformer
 * Terminals: 1=Primary Start, 2=Center Tap, 3=Primary End
 *            4=Secondary Start, 5=Secondary End
 .SUBCKT LT700 1 2 3 4 5
@@ -305,10 +310,10 @@ const magneticParts: KitComponent[] = [
 			primaryEnd: 72,
 			secondaryStart: 73,
 			secondaryEnd: 74,
-			//.SUBCKT LT700 winding values.
-			// lp1H: 0.4,
-			// lp2H: 0.4,
-			// lsH: 0.004,
+			// Winding values.  NOTE: these are 1/10 of the datasheet-derived
+			// SPICE reference above (0.4 H + 0.4 H primary, 0.004 H secondary).
+			// The reduction predates this comment and its reason isn't
+			// recorded — revisit when T1 gets a proper coupled-inductor model.
 			lp1H: 0.04,
 			lp2H: 0.04,
 			lsH: 0.0004,
@@ -393,6 +398,15 @@ const controlsAndSources: KitComponent[] = [
 		name: 'voltmeter',
 		terminals: [80, 81],
 		metadata: { positive: 81, negative: 80 }
+	},
+	{
+		id: 'SOLAR1',
+		kind: 'solar-cell',
+		name: 'solar battery',
+		terminals: [64, 65],
+		value: 0.5,
+		unit: 'V',
+		metadata: { positive: 64, negative: 65, defaultPosition: 0.5 }
 	}
 ];
 
@@ -409,4 +423,4 @@ export const KIT_TERMINAL_IDS = Array.from(
 	new Set(KIT_COMPONENTS.flatMap((component) => component.terminals))
 ).sort((a, b) => a - b);
 
-export const UNMAPPED_TERMINAL_GAPS = [64, 65, 84, 85];
+export const UNMAPPED_TERMINAL_GAPS = [84, 85];
