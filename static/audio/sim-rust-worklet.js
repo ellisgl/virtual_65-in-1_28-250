@@ -648,6 +648,7 @@ class SimRustProcessor extends AudioWorkletProcessor {
     cacheSpeakerProbes(netlist) {
         this.speakerTopA = -1; this.speakerTopB = -1;
         this.t1PrimaryTop = -1; this.t1CenterTop = -1;
+        this.earphoneA = -1; this.earphoneB = -1;
 
         // The speaker is modeled as nodeA --[Rvc]-- midNode --[Lvc]-- nodeB.
         // We want to probe [nodeA, nodeB] to get the full voltage across the coil.
@@ -655,6 +656,16 @@ class SimRustProcessor extends AudioWorkletProcessor {
         for (const el of netlist.elements) {
             if (el.componentId === 'SPK1:Rvc') nodeA = el.nodes[0];
             if (el.componentId === 'SPK1:Lvc') nodeB = el.nodes[1];
+        }
+
+        // The piezo earphone (EAR1) is a cap ∥ resistor across two terminals;
+        // its audio output is simply the voltage across those nodes.
+        for (const el of netlist.elements) {
+            if (el.componentId === 'EAR1:C') {
+                this.earphoneA = el.nodes[0];
+                this.earphoneB = el.nodes[1];
+                break;
+            }
         }
 
         if (nodeA !== -1 && nodeB !== -1) {
@@ -710,6 +721,16 @@ class SimRustProcessor extends AudioWorkletProcessor {
         } else if (this.speakerTopA >= 0 || this.speakerTopB >= 0) {
             const va = this.speakerTopA >= 0 ? this.sim.node_voltage(this.speakerTopA) : 0;
             const vb = this.speakerTopB >= 0 ? this.sim.node_voltage(this.speakerTopB) : 0;
+            if (Number.isNaN(va) || Number.isNaN(vb)) {
+                real_sim_nan = true;
+            } else {
+                v = va - vb;
+                v_ok = true;
+            }
+        } else if (this.earphoneA >= 0 || this.earphoneB >= 0) {
+            // No speaker present — listen to the piezo earphone (EAR1) instead.
+            const va = this.earphoneA >= 0 ? this.sim.node_voltage(this.earphoneA) : 0;
+            const vb = this.earphoneB >= 0 ? this.sim.node_voltage(this.earphoneB) : 0;
             if (Number.isNaN(va) || Number.isNaN(vb)) {
                 real_sim_nan = true;
             } else {

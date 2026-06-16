@@ -287,7 +287,33 @@ const electroMechanical: KitComponent[] = [
 			params: { tempC: 300, nominalVoltage: 3.5, nominalCurrent: 0.2, nominalPower: 0.7 }
 		}
 	},
-	{ id: 'SPK1', kind: 'speaker', name: '8 ohm speaker', terminals: [90, 91], value: 8, unit: 'ohm' }
+	{ id: 'SPK1', kind: 'speaker', name: '8 ohm speaker', terminals: [90, 91], value: 8, unit: 'ohm' },
+	{
+		// Crystal/piezoelectric earphone across terminals 84/85.  Rated
+		// "600 Ω", but a piezo element is electrically a small capacitor, not
+		// a resistor — its impedance is ~600 Ω only near a specific test
+		// frequency (1/2πfC).  We model it as that capacitance in parallel
+		// with a high leakage/bleed resistance, and treat the voltage across
+		// it as the audio output (see netlist.ts + the worklet probe).
+		id: 'EAR1',
+		kind: 'earphone',
+		name: 'crystal earphone',
+		terminals: [84, 85],
+		value: 600,
+		unit: 'ohm',
+		model: {
+			name: 'piezo-earphone',
+			type: 'earphone',
+			params: {
+				// C chosen so |Z| ≈ 600 Ω at ~1 kHz (the usual rating point):
+				//   C = 1/(2π·1000·600) ≈ 265 nF.
+				capacitanceFarads: 2.65e-7,
+				// High parallel resistance: DC bleed path + dielectric loss, so
+				// the node isn't left floating (keeps the solver well-posed).
+				leakageResistanceOhms: 1_000_000
+			}
+		}
+	}
 ];
 
 const magneticParts: KitComponent[] = [
@@ -423,4 +449,6 @@ export const KIT_TERMINAL_IDS = Array.from(
 	new Set(KIT_COMPONENTS.flatMap((component) => component.terminals))
 ).sort((a, b) => a - b);
 
-export const UNMAPPED_TERMINAL_GAPS = [84, 85];
+// Terminals that exist on the board silkscreen but no component claims.
+// (84/85 are now the EAR1 earphone; none remain unmapped.)
+export const UNMAPPED_TERMINAL_GAPS: number[] = [];

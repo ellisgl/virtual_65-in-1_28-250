@@ -10,6 +10,7 @@ export type ComponentKind =
 	| 'zener-diode'
 	| 'battery'
 	| 'speaker'
+	| 'earphone'
 	| 'transformer'
 	| 'lamp'
 	| 'relay'
@@ -19,7 +20,7 @@ export type ComponentKind =
 	| 'solar-cell'
 	| 'voltmeter';
 
-export type DeviceModelType = 'diode' | 'bjt' | 'scr' | 'relay' | 'lamp';
+export type DeviceModelType = 'diode' | 'bjt' | 'scr' | 'relay' | 'lamp' | 'earphone';
 
 export interface DeviceModel {
 	name: string;

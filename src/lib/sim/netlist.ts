@@ -103,6 +103,37 @@ export function buildSimulationNetlist(
 			continue;
 		}
 
+		if (component.kind === 'earphone') {
+			const leakageOhms = asNumber(component.model?.params?.leakageResistanceOhms) ?? 1_000_000;
+			const capF = asNumber(component.model?.params?.capacitanceFarads) ?? 2.65e-7;
+			if (binding.nodeIds.length !== 2 || capF <= 0 || leakageOhms <= 0) {
+				unsupported.push({
+					componentId: component.id,
+					kind: component.kind,
+					reason: 'Earphone requires two nodes and positive capacitance/leakage params'
+				});
+				continue;
+			}
+			// A piezo/crystal earphone is electrically a small capacitor (its
+			// "600 Ω" rating is |Z| at ~1 kHz, not a real resistance) with a
+			// high parallel bleed resistance.  Model both across the two
+			// terminals; the audio output is the voltage developed across them.
+			elements.push({
+				type: 'capacitor',
+				componentId: `${component.id}:C`,
+				nodes: [binding.nodeIds[0], binding.nodeIds[1]],
+				capacitanceFarads: capF,
+				initialVoltage: 0
+			});
+			elements.push({
+				type: 'resistor',
+				componentId: `${component.id}:Rleak`,
+				nodes: [binding.nodeIds[0], binding.nodeIds[1]],
+				resistanceOhms: leakageOhms
+			});
+			continue;
+		}
+
 		if (component.kind === 'battery') {
 			const voltage = asNumber(valueOverrides[component.id] ?? component.value);
 			const positiveTerminal = asNumber(component.metadata?.positive);
