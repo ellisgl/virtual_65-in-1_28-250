@@ -466,6 +466,7 @@ export function buildSimulationNetlist(
 			const normallyOpen = asNumber(component.metadata?.normallyOpen) ?? component.terminals[4] ?? null;
 
 			const coilResistanceOhms = asNumber(component.model?.params?.coilResistanceOhms) ?? 150;
+			const coilInductanceH = asNumber(component.model?.params?.inductance) ?? 0;
 			const ronOhms = asNumber(component.model?.params?.ron) ?? 0.05;
 			const roffOhms = asNumber(component.model?.params?.roff) ?? 1_000_000;
 			const onCurrent = asNumber(component.model?.params?.onCurrent) ?? 0.02;
@@ -511,10 +512,30 @@ export function buildSimulationNetlist(
 				continue;
 			}
 
+			// The relay's coil inductance matters: in self-interrupting (buzzer)
+			// circuits, the L/R rise time of the coil current is what sets the
+			// buzz rate.  The WASM relay element models the coil as pure
+			// resistance + hysteresis switch, so without this series inductor
+			// the relay chatters at solver-step rate (~70 kHz, ultrasonic and
+			// numerically nasty) instead of buzzing at the mechanical ~330 Hz
+			// the same model produces with L included.  At DC the inductor is
+			// a short, so stable relay circuits are unaffected.
+			let relayCoilPositiveNode = coilPositiveNode;
+			if (coilInductanceH > 0) {
+				const coilMid = allocInternalNode();
+				elements.push({
+					type: 'inductor',
+					componentId: `${component.id}:Lcoil`,
+					nodes: [coilPositiveNode, coilMid],
+					inductanceHenry: coilInductanceH
+				});
+				relayCoilPositiveNode = coilMid;
+			}
+
 			elements.push({
 				type: 'relay',
 				componentId: component.id,
-				coilPositiveNode,
+				coilPositiveNode: relayCoilPositiveNode,
 				coilNegativeNode,
 				commonNode,
 				normallyClosedNode,

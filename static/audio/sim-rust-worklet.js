@@ -341,6 +341,58 @@ class SimRustProcessor extends AudioWorkletProcessor {
             x1: 0, x2: 0, y1: 0, y2: 0,
         };
         this._recomputeSpeakerFilterCoeffs();
+
+        // ── Relay click voice ────────────────────────────────────────────
+        // A relay buzzer's sound IS its own contacts — there's no speaker in
+        // the circuit, so we synthesize the mechanical click here, at sample
+        // rate, and mix it into the output.  Watching relay-active edges in
+        // the step loop catches the true (kHz-range) self-interrupt rate that
+        // the ~30 fps UI snapshot path aliases away.
+        //
+        // Each edge retriggers a short voice = noise snap (fast decay) + a
+        // damped body resonance.  Energize is brighter/louder than release.
+        // `relayClick.env` counts down samples; <=0 means silent.
+        this.relayActivePrev = null;       // last-seen relay-active byte (null until first read)
+        this.relayClick = {
+            env: 0,            // remaining samples in the current click
+            len: 0,            // total length of the current click (samples)
+            phase: 0,          // body-resonance phase accumulator (radians)
+            omega: 0,          // body-resonance angular step (rad/sample)
+            snapTau: 0,        // noise-decay time constant (samples)
+            bodyTau: 0,        // body-decay time constant (samples)
+            level: 0,          // peak amplitude of this click
+        };
+    }
+
+    /**
+     * Retrigger the relay-click voice for an energize (true) or release
+     * (false) transition.  Parameters mirror the JS-side relay-click.ts so
+     * the buzzer and single UI clicks sound like the same relay.
+     */
+    _triggerRelayClick(energized) {
+        const sr = sampleRate;
+        const c = this.relayClick;
+        c.len     = Math.floor(0.02 * sr);             // 20 ms voice
+        c.env     = c.len;
+        c.phase   = 0;
+        c.omega   = 2 * Math.PI * (energized ? 1900 : 1250) / sr;
+        c.snapTau = (energized ? 0.0018 : 0.0024) * sr;
+        c.bodyTau = (energized ? 0.006  : 0.007 ) * sr;
+        c.level   = energized ? 0.30 : 0.18;
+    }
+
+    /**
+     * One sample of the relay-click voice, or 0 when idle.  Advances state.
+     */
+    _relayClickSample() {
+        const c = this.relayClick;
+        if (c.env <= 0) return 0;
+        const age = c.len - c.env;                     // samples since trigger
+        const snap = (Math.random() * 2 - 1) * Math.exp(-age / c.snapTau);
+        const body = 0.6 * Math.sin(c.phase) * Math.exp(-age / c.bodyTau);
+        c.phase += c.omega;
+        c.env--;
+        return (snap + body) * c.level;
     }
 
     /**
@@ -431,6 +483,8 @@ class SimRustProcessor extends AudioWorkletProcessor {
                     this.prevV = 0;
                     this.audioPhase = 0;
                     this.fadePos = 0;
+                    this.relayActivePrev = null;
+                    this.relayClick.env = 0;
                     this._resetSpeakerFilterState();
                     this.didFirstQuantumReport = false;
                     this.errorReported = false;
@@ -984,6 +1038,17 @@ class SimRustProcessor extends AudioWorkletProcessor {
                 this.fadePos++;
             }
 
+            // Mix in the relay click voice (additive — it's a parallel
+            // mechanical sound, not part of the simulated electrical path,
+            // so it bypasses the speaker filter and tanh).  Clamp to keep
+            // the sum inside the AudioContext's [-1, 1] range.
+            const clickSample = this._relayClickSample();
+            if (clickSample !== 0) {
+                s += clickSample;
+                if (s >  1) s =  1;
+                else if (s < -1) s = -1;
+            }
+
             // Diagnostic capture: post-tanh (= what AudioContext receives).
             if (cap !== null && cap.pos < cap.total) {
                 cap.postTanh[cap.pos] = s;
@@ -1088,6 +1153,23 @@ class SimRustProcessor extends AudioWorkletProcessor {
             }
 
             const newV = this.speakerV();
+
+            // Relay-active edge detection (sample-accurate buzzer source).
+            // export_relay_active() returns one byte per relay; we OR them so
+            // any relay toggling triggers a click.  Cheap when no relay is
+            // present (empty array → folds to 0).
+            if (this.sim) {
+                let active = 0;
+                try {
+                    const flags = this.sim.export_relay_active();
+                    for (let i = 0; i < flags.length; i++) active |= flags[i];
+                } catch (_e) { active = this.relayActivePrev ?? 0; }
+                if (this.relayActivePrev !== null && active !== this.relayActivePrev) {
+                    this._triggerRelayClick(active !== 0);
+                }
+                this.relayActivePrev = active;
+            }
+
             const stepStart = simT;
             simT += stepDt;
 

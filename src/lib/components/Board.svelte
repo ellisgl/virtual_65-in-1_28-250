@@ -267,6 +267,11 @@
 		}
 		if (energized === prevRelayEnergized) return;
 		prevRelayEnergized = energized;
+		// While a transient sim runs, the worklet generates relay clicks
+		// itself — sample-accurately, so fast buzzer circuits actually buzz.
+		// Skip the UI-side click then to avoid doubling; it remains the
+		// click source for static/DC state changes (sim not running).
+		if (transientRunning) return;
 		if (audioContext) playRelayClick(audioContext, energized);
 	});
 	let lampGlowOpacity = $derived(
