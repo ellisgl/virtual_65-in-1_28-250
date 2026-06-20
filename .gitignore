@@ -24,3 +24,4 @@ vite.config.ts.timestamp-*
 
 /static/audio/sim_wasm.js
 /static/audio/sim_wasm_bg.wasm
+/.codebase-memory/

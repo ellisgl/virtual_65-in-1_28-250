@@ -122,9 +122,15 @@ function makeStore() {
 		clearAll() {
 			wires.length = 0;
 		},
-		loadWires(newWires: Array<{ fromTerminal: number; toTerminal: number }>) {
+		loadWires(
+			newWires: Array<{
+				fromTerminal: number;
+				toTerminal: number;
+				shapingPoints?: Array<{ x: number; y: number }>;
+			}>
+		) {
 			wires.length = 0;
-			for (const { fromTerminal, toTerminal } of newWires) {
+			for (const { fromTerminal, toTerminal, shapingPoints } of newWires) {
 				const exists = wires.some(
 					(w) =>
 						(w.fromTerminal === fromTerminal && w.toTerminal === toTerminal) ||
@@ -137,7 +143,8 @@ function makeStore() {
 						fromTerminal,
 						toTerminal,
 						color: info.color,
-						lengthCm: info.lengthCm
+						lengthCm: info.lengthCm,
+						shapingPoints: shapingPoints ? [...shapingPoints] : []
 					});
 				}
 			}

@@ -14,7 +14,9 @@
    xmlns:xlink="http://www.w3.org/1999/xlink"
    xmlns="http://www.w3.org/2000/svg"
    xmlns:svg="http://www.w3.org/2000/svg">
-  <style type="text/css"><![CDATA[
+  <style
+     type="text/css"
+     id="style1"><![CDATA[
 .s0{stroke-width:0.5}
 .s1{-inkscape-font-specification:'Noto Mono Bold';fill:#000000;font-family:'Noto Mono';font-size:2.04611px;font-stretch:normal;font-style:normal;font-variant:normal;font-weight:bold;stroke-width:0.25}
 .s2{-inkscape-font-specification:'Noto Sans Bold';direction:ltr;fill-opacity:1;fill:#000000;font-family:'Noto Sans';font-size:3.52777px;font-stretch:normal;font-style:normal;font-variant:normal;font-weight:bold;opacity:0.98;stroke-dasharray:none;stroke-width:0.499999;stroke:none;text-align:center;text-anchor:middle;writing-mode:lr-tb}
@@ -211,15 +213,15 @@
      inkscape:deskcolor="#505050"
      inkscape:document-units="mm"
      showguides="true"
-     inkscape:zoom="2.0065128"
-     inkscape:cx="-161.47417"
-     inkscape:cy="423.8697"
+     inkscape:zoom="0.42440693"
+     inkscape:cx="348.72192"
+     inkscape:cy="599.66033"
      inkscape:window-width="1600"
      inkscape:window-height="840"
      inkscape:window-x="0"
      inkscape:window-y="0"
      inkscape:window-maximized="1"
-     inkscape:current-layer="g124"
+     inkscape:current-layer="layer1"
      showgrid="false"
      inkscape:lockguides="false">
     <sodipodi:guide
@@ -2993,25 +2995,25 @@
     <text
        xml:space="preserve"
        class="s41"
-       x="119.54417"
+       x="113.33704"
        y="27.225988"
        id="text143"><tspan
          sodipodi:role="line"
          id="tspan143"
          class="s14"
-         x="119.54417"
-         y="27.225988">65 in 1Electronic Project Kit</tspan></text>
+         x="113.33704"
+         y="27.225988">65(ish) in 1Electronic Project Kit</tspan></text>
     <text
        xml:space="preserve"
        class="s41"
-       x="119.41718"
+       x="142.17238"
        y="11.762506"
        id="text145"><tspan
          sodipodi:role="line"
          id="tspan145"
          class="s118"
-         x="119.41718"
-         y="11.762506">Science Fair</tspan></text>
+         x="142.17238"
+         y="11.762506">Fair Science</tspan></text>
     <use
        x="0"
        y="0"

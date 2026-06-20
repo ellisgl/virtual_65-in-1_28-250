@@ -19,6 +19,74 @@ function clamp(value: number, min: number, max: number): number {
 	return Math.max(min, Math.min(max, value));
 }
 
+/**
+ * Resonant frequency of an L·C tank: f = 1 / (2π·√(L·C)).
+ */
+function tankResonanceHz(inductanceH: number, capacitanceF: number): number {
+	if (inductanceH <= 0 || capacitanceF <= 0) return 0;
+	return 1 / (2 * Math.PI * Math.sqrt(inductanceH * capacitanceF));
+}
+
+/**
+ * Detect a crystal-radio receiver in the wiring and, if present, compute the
+ * tank's resonant ("tuning") frequency for the current variable-cap setting.
+ *
+ * The simulator can't represent broadcast-band RF (carriers are ~0.5–1.7 MHz,
+ * far above the audio-rate solver), and in fact the antenna and the plain
+ * multi-tap coil aren't modeled as circuit elements at all — so a crystal set
+ * is electrically silent in the sim.  Instead we recognize the topology and
+ * hand the audio worklet a tuning frequency; it synthesizes the received
+ * audio (stations + static) from that.
+ *
+ * Recognized when an antenna, a detector diode, and a variable tuning
+ * capacitor are all wired into the circuit.  The tank inductance is taken
+ * from the tuning coil's per-segment inductance (two segments are in the
+ * resonant loop in the standard hookup); the capacitance is the live
+ * variable-cap value, so the returned tuningHz tracks the knob.
+ */
+function detectRadio(
+	topology: CircuitTopology,
+	componentById: Map<string, KitComponent>,
+	connectedNodeSet: Set<number>,
+	valueOverrides: Record<string, number>
+): SimulationNetlist['radio'] {
+	const connectedKinds = new Set<string>();
+	let varCap: KitComponent | undefined;
+	let coil: KitComponent | undefined;
+	for (const binding of topology.componentBindings) {
+		if (!binding.nodeIds.some((id) => connectedNodeSet.has(id))) continue;
+		const component = componentById.get(binding.componentId);
+		if (!component) continue;
+		connectedKinds.add(component.kind);
+		if (component.kind === 'variable-capacitor' && !varCap) varCap = component;
+		if (component.kind === 'inductor' && !coil) coil = component;
+	}
+
+	const isRadio =
+		connectedKinds.has('antenna') &&
+		connectedKinds.has('diode') &&
+		connectedKinds.has('variable-capacitor');
+	if (!isRadio || !varCap) return undefined;
+
+	// Tank inductance: two of the tuning coil's segments sit across the
+	// variable cap in the usual hookup.  Fall back to a value that lands the
+	// sweep in the AM band if the coil lacks the metadata.
+	const segmentH = asNumber(coil?.metadata?.segmentInductance);
+	const tankInductanceH = segmentH !== null ? segmentH * 2 : 220e-6;
+
+	const capNow = asNumber(valueOverrides[varCap.id] ?? varCap.value) ?? 0;
+	const capMax = asNumber(varCap.metadata?.max) ?? capNow;
+	const capMin = asNumber(varCap.metadata?.min) ?? capNow;
+
+	return {
+		enabled: true,
+		tuningHz: tankResonanceHz(tankInductanceH, capNow),
+		// Largest C → lowest frequency, and vice-versa.
+		bandLoHz: tankResonanceHz(tankInductanceH, Math.max(capMax, capMin)),
+		bandHiHz: tankResonanceHz(tankInductanceH, Math.min(capMax, capMin))
+	};
+}
+
 export function buildSimulationNetlist(
 	topology: CircuitTopology,
 	components: KitComponent[],
@@ -857,7 +925,8 @@ export function buildSimulationNetlist(
 		elements,
 		unsupported,
 		groundNodeId: topology.groundNodeId,
-		connectedNodeIds: topology.connectedNodeIds
+		connectedNodeIds: topology.connectedNodeIds,
+		radio: detectRadio(topology, componentById, connectedNodeSet, valueOverrides)
 	};
 }
 

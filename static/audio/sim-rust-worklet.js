@@ -305,18 +305,7 @@ class SimRustProcessor extends AudioWorkletProcessor {
         // through SPK1:Lvc — the physically-correct cone-driving signal.
         this.audioProbe = 'voltage';
 
-        // Boot tone — plays a 440 Hz / 0.3 amplitude sine for ~200 ms when
-        // process() first runs after worklet construction.  Lets us
-        // verify audio routing from the worklet output to the user's
-        // speakers independently of the simulator producing audio.  If
-        // you hear a beep when clicking Run, audio output works; if you
-        // don't, something downstream of the worklet is silencing it
-        // (browser autoplay, tab mute, output-device misroute, etc).
-        this.bootToneSamples = Math.round(sampleRate * 0.2);
-        this.bootTonePos     = 0;
-        this.bootToneFreq    = 440;
-
-        // ── Diagnostic raw-waveform capture ───────────────────────────────
+        // ── Diagnostic raw-waveform capture ───────────────────────────────────────────
         // Triggered by { type: 'startDiagnosticCapture', seconds } message.
         // While active, records four parallel streams per audio sample:
         //   raw:        simulator probe value, pre-DC-block, pre-everything
@@ -362,6 +351,11 @@ class SimRustProcessor extends AudioWorkletProcessor {
             bodyTau: 0,        // body-decay time constant (samples)
             level: 0,          // peak amplitude of this click
         };
+
+        // Synthesized AM radio receiver (set up lazily by _configureRadio when
+        // a radio topology is detected; null = not a radio circuit).
+        this.radio = null;
+        this.radioStations = null;
     }
 
     /**
@@ -393,6 +387,174 @@ class SimRustProcessor extends AudioWorkletProcessor {
         c.phase += c.omega;
         c.env--;
         return (snap + body) * c.level;
+    }
+
+    // ── Synthesized AM radio receiver ────────────────────────────────────
+    // A crystal radio can't be simulated (the carriers are ~MHz RF and the
+    // antenna/coil aren't modeled as circuit elements), so when the netlist
+    // reports a radio topology we abandon the solver for the audio path and
+    // synthesize what the earphone would hear: a bank of fixed-carrier
+    // "stations", each tuned in/out by how close the tank's resonant
+    // frequency (netlist.radio.tuningHz, which tracks the variable cap) sits
+    // to that station's carrier.  Between stations you get static.
+
+    _initRadio() {
+        // Build a Morse key schedule (on/off segments) from a short message.
+        const MORSE = { A:'.-', C:'-.-.', D:'-..', E:'.', M:'--', O:'---', Q:'--.-', R:'.-.', S:'...', T:'-' };
+        const dot = 0.07, dash = 0.21, intra = 0.07, inter = 0.21, word = 0.49;
+        const key = [];
+        const msg = 'CQ CQ DE ';
+        for (const ch of msg) {
+            if (ch === ' ') { key.push([false, word]); continue; }
+            const code = MORSE[ch] || '';
+            for (let k = 0; k < code.length; k++) {
+                key.push([true, code[k] === '.' ? dot : dash]);
+                key.push([false, k === code.length - 1 ? inter : intra]);
+            }
+        }
+
+        // Station carriers chosen to fall inside the achievable tuning sweep
+        // (~700–1500 kHz for this kit's 220 µH tank + 51–235 pF), with dead
+        // air beyond both ends.  Each gets a distinct synthesized "program".
+        const mkSt = () => ({ t: 0, phase: 0,
+            noteIdx: 0, noteTimer: 0, noteAge: 0, noteFreq: 0,
+            syl: 0, sylTarget: 0, sylTimer: 0, nLP: 0, nHP: 0,
+            sec: 0, keyIdx: 0, keyTimer: 0, keyOn: false });
+        this.radioStations = [
+            { carrier: 720e3,  type: 'music',  strength: 1.0,  st: mkSt() },
+            { carrier: 850e3,  type: 'talk',   strength: 0.9,  st: mkSt() },
+            { carrier: 1000e3, type: 'time',   strength: 1.0,  st: mkSt() },
+            { carrier: 1150e3, type: 'music2', strength: 0.85, st: mkSt() },
+            { carrier: 1320e3, type: 'morse',  strength: 0.8,  st: mkSt(), key },
+            { carrier: 1450e3, type: 'weak',   strength: 0.5,  st: mkSt() }
+        ];
+        this.radioMixLP = 0;        // treble-loss low-pass state
+        this.radioInvSr = 1 / sampleRate;
+    }
+
+    /** Set up / refresh the receiver from a netlist.radio descriptor. */
+    _configureRadio(radio) {
+        if (radio && radio.enabled) {
+            if (!this.radioStations) this._initRadio();
+            this.radio = {
+                enabled: true,
+                tuningHz: radio.tuningHz || 0,
+                bandLoHz: radio.bandLoHz || 0,
+                bandHiHz: radio.bandHiHz || 0
+            };
+        } else {
+            this.radio = null;
+        }
+    }
+
+    /** One audio sample of one station's program (baseband, ~[-1, 1]). */
+    _stationProgram(s) {
+        const st = s.st;
+        const dt = this.radioInvSr;
+        st.t += dt;
+        const TWO_PI = 2 * Math.PI;
+        switch (s.type) {
+            case 'music':
+            case 'weak': {
+                // Looping arpeggio over a major-ish scale; soft plucked env.
+                const scale = [0, 4, 7, 12, 7, 4];   // semitone offsets
+                const base = s.type === 'weak' ? 196 : 220;
+                if (st.noteTimer <= 0) {
+                    st.noteFreq = base * Math.pow(2, scale[st.noteIdx % scale.length] / 12);
+                    st.noteIdx++;
+                    st.noteTimer = 0.22;
+                    st.noteAge = 0;
+                    st.phase = 0;
+                }
+                st.noteTimer -= dt;
+                st.noteAge += dt;
+                const env = Math.exp(-st.noteAge * 4) * (1 - Math.exp(-st.noteAge * 90));
+                st.phase += TWO_PI * st.noteFreq * dt;
+                return env * (Math.sin(st.phase) + 0.3 * Math.sin(2 * st.phase) + 0.15 * Math.sin(3 * st.phase));
+            }
+            case 'music2': {
+                // Slower triad arpeggio, reedier (odd harmonics), lower key.
+                const triad = [0, 7, 12, 7, 4, 0];
+                if (st.noteTimer <= 0) {
+                    st.noteFreq = 165 * Math.pow(2, triad[st.noteIdx % triad.length] / 12);
+                    st.noteIdx++;
+                    st.noteTimer = 0.30;
+                    st.noteAge = 0;
+                    st.phase = 0;
+                }
+                st.noteTimer -= dt;
+                st.noteAge += dt;
+                const env = Math.exp(-st.noteAge * 2.5) * (1 - Math.exp(-st.noteAge * 60));
+                st.phase += TWO_PI * st.noteFreq * dt;
+                return 0.9 * env * (Math.sin(st.phase) + 0.4 * Math.sin(3 * st.phase) + 0.2 * Math.sin(5 * st.phase));
+            }
+            case 'talk': {
+                // Band-limited noise gated by a syllabic envelope → muffled
+                // speech cadence.
+                if (st.sylTimer <= 0) {
+                    st.sylTarget = Math.random() < 0.28 ? 0 : 0.4 + Math.random() * 0.6;
+                    st.sylTimer = 0.08 + Math.random() * 0.18;
+                }
+                st.sylTimer -= dt;
+                st.syl += (st.sylTarget - st.syl) * 0.02;     // smooth gate
+                const wn = Math.random() * 2 - 1;
+                st.nLP += (wn - st.nLP) * 0.45;                // crude low-pass
+                return st.syl * st.nLP * 0.9;
+            }
+            case 'time': {
+                // WWV-like: quiet background tone + a tick at the top of each
+                // second.
+                st.sec += dt;
+                if (st.sec >= 1) st.sec -= 1;
+                const tickOn = st.sec < 0.04;
+                st.phase += TWO_PI * (tickOn ? 1000 : 500) * dt;
+                return (tickOn ? 0.6 : 0.12) * Math.sin(st.phase);
+            }
+            case 'morse': {
+                // Keyed 700 Hz tone following the precomputed schedule.
+                if (st.keyTimer <= 0) {
+                    const seg = s.key[st.keyIdx % s.key.length];
+                    st.keyOn = seg[0];
+                    st.keyTimer = seg[1];
+                    st.keyIdx++;
+                }
+                st.keyTimer -= dt;
+                st.phase += TWO_PI * 700 * dt;
+                return st.keyOn ? 0.5 * Math.sin(st.phase) : 0;
+            }
+            default:
+                return 0;
+        }
+    }
+
+    /** One fully-mixed receiver output sample (already scaled for output). */
+    _radioSample() {
+        const HALF_BW = 12e3;        // station capture half-bandwidth (Hz)
+        const OUT_LEVEL = 0.16;      // worklet output level (Board master ×4)
+        const f = this.radio.tuningHz;
+
+        let mix = 0;
+        let bestW = 0;
+        for (const s of this.radioStations) {
+            const d = (f - s.carrier) / HALF_BW;
+            const w = 1 / (1 + d * d);               // Lorentzian selectivity
+            if (w > bestW) bestW = w;
+            if (w < 0.02) continue;                  // negligible — skip synth
+            mix += this._stationProgram(s) * w * s.strength;
+        }
+
+        // Treble comes in as you tune in: low-pass cutoff rises with quality.
+        const cutoff = 700 + (4500 - 700) * Math.sqrt(bestW);
+        const rc = 1 / (2 * Math.PI * cutoff);
+        const alpha = this.radioInvSr / (rc + this.radioInvSr);
+        this.radioMixLP += alpha * (mix - this.radioMixLP);
+
+        // Static: hiss louder between stations, plus the odd atmospheric crackle.
+        const hiss = (Math.random() * 2 - 1) * (0.05 + 0.5 * (1 - bestW));
+        let crackle = 0;
+        if (Math.random() < 0.0006) crackle = (Math.random() * 2 - 1) * 0.4 * (1 - bestW * 0.5);
+
+        return (this.radioMixLP + hiss + crackle) * OUT_LEVEL;
     }
 
     /**
@@ -461,6 +623,7 @@ class SimRustProcessor extends AudioWorkletProcessor {
                         if (this.sim) {
                             const dcOk = this.sim.solve_dc();
                             this.cacheSpeakerProbes(msg.netlist);
+                            this._configureRadio(msg.netlist.radio);
                             this.knownNodeIds = collectTopologyNodeIds(msg.netlist);
                             this.groundNodeId = msg.netlist.groundNodeId;
                             this.lastConfigureStatus = 'success';
@@ -571,6 +734,7 @@ class SimRustProcessor extends AudioWorkletProcessor {
                     this.disposeSim();
                     this.sim = newSim;
                     this.cacheSpeakerProbes(msg.netlist);
+                    this._configureRadio(msg.netlist.radio);
                     this.knownNodeIds = collectTopologyNodeIds(msg.netlist);
                     this.groundNodeId = msg.netlist.groundNodeId;
                     break;
@@ -802,7 +966,6 @@ class SimRustProcessor extends AudioWorkletProcessor {
                             running: this.running,
                             hasSim: !!this.sim,
                             wasmReady: this.wasmReady,
-                            bootTonePos: this.bootTonePos,
                             speakerA: this.speakerTopA,
                             speakerB: this.speakerTopB,
                             t1P: this.t1PrimaryTop,
@@ -859,7 +1022,6 @@ class SimRustProcessor extends AudioWorkletProcessor {
                 running: this.running,
                 hasSim: !!this.sim,
                 wasmReady: this.wasmReady,
-                bootTonePos: this.bootTonePos,
                 speakerA: this.speakerTopA,
                 speakerB: this.speakerTopB,
                 adaptiveDt: this.adaptiveDt,
@@ -882,42 +1044,21 @@ class SimRustProcessor extends AudioWorkletProcessor {
             return true;
         }
 
-        // Boot tone — for the first ~200ms after process() starts running,
-        // emit a 440 Hz / 0.3 amplitude sine wave.  This is an audio-
-        // routing probe: if you hear a clean A4 beep when clicking Run,
-        // output is wired correctly.  If you don't, the bug is downstream
-        // of this worklet's output.  Once bootTonePos exhausts, all
-        // subsequent quanta run normal sim audio.
-        if (this.bootTonePos < this.bootToneSamples) {
-            const omega = 2 * Math.PI * this.bootToneFreq / sampleRate;
-            let i = 0;
-            for (; i < frames && this.bootTonePos < this.bootToneSamples; i++) {
-                const s = 0.3 * Math.sin(omega * this.bootTonePos);
+        // Radio fast-path: a crystal-radio circuit has no simulatable audio
+        // (the RF and antenna/coil aren't modeled), so synthesize the received
+        // signal directly and skip the solver entirely.  tuningHz was set from
+        // the netlist on configure/updateControls and tracks the tuning knob.
+        if (this.radio && this.radio.enabled) {
+            for (let i = 0; i < frames; i++) {
+                let s = this._radioSample();
+                if (this.fadePos < FADE_IN_SAMPLES) {
+                    s *= this.fadePos / FADE_IN_SAMPLES;
+                    this.fadePos++;
+                }
                 ch0[i] = s;
                 for (let c = 1; c < out.length; c++) out[c][i] = s;
-                this.bootTonePos++;
             }
-            if (this.bootTonePos >= this.bootToneSamples) {
-                console.log(`[${new Date().toISOString()}] [worklet] boot tone finished`);
-                // Clear state carryover so simulation starts at t=0
-                this.audioPhase = 0;
-                this.prevV = 0;
-                this.dcPrevOut = 0;
-                this.dcPrevIn = 0;
-                this._resetSpeakerFilterState();
-                this.didFirstQuantumReport = false;
-                
-                // If there are remaining frames in this quantum, we MUST
-                // continue to the simulation logic instead of returning.
-                if (i < frames) {
-                    console.log(`[worklet] transitioning to sim in-quantum at frame ${i}`);
-                    frame = i;
-                } else {
-                    return true;
-                }
-            } else {
-                return true;
-            }
+            return true;
         }
 
         // One-shot diagnostic + periodic counters.

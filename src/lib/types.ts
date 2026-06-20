@@ -246,6 +246,21 @@ export interface SimulationNetlist {
 	unsupported: UnsupportedElement[];
 	groundNodeId: number | null;
 	connectedNodeIds: number[];
+	/**
+	 * Present (and enabled) when the wiring forms a radio receiver
+	 * (antenna + tuned tank + detector diode).  The simulator can't represent
+	 * MHz RF, so when this is set the audio worklet switches to a synthesized
+	 * AM-receiver instead of solving the circuit.  `tuningHz` is the tank's
+	 * resonant frequency for the current variable-cap setting; the worklet
+	 * weights its station bank against it.  Recomputed whenever the tuning
+	 * knob moves (so it changes on every updateControls).
+	 */
+	radio?: {
+		enabled: boolean;
+		tuningHz: number;
+		bandLoHz: number;
+		bandHiHz: number;
+	};
 }
 
 export interface SimulationBuildOptions {
