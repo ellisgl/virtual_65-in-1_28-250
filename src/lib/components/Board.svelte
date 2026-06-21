@@ -922,6 +922,18 @@
 					Open the 65-in-1 manual ↗
 				</a>
 			</section>
+
+			<section class="help-section">
+				<h3>Source</h3>
+				<a
+					class="help-link"
+					href="https://github.com/ellisgl/virtual_65-in-1_28-250"
+					target="_blank"
+					rel="noopener noreferrer"
+				>
+					View on GitHub ↗
+				</a>
+			</section>
 		</div>
 	</div>
 {/if}
