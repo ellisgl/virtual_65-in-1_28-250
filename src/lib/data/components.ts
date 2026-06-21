@@ -267,12 +267,21 @@ const electroMechanical: KitComponent[] = [
 			name: 'relay-default',
 			type: 'relay',
 			params: {
-				inductance: 1.12,
+				// 3.0 H coil: large enough that a self-interrupting buzzer
+				// hookup oscillates at a pleasant ~550 Hz (the inductance only
+				// sets the buzz pitch — it's a short at DC, so it has no effect
+				// on steady-state circuits like the light-activated relay).
+				inductance: 3.0,
 				coilResistanceOhms: 150,
 				ron: 0.05,
 				roff: 1_000_000,
-				onCurrent: 0.02,
-				offCurrent: 0.015
+				// Pull-in ~5 mA / drop-out ~3 mA.  These small kit relays are
+				// sensitive: the documented projects (e.g. Project 3, the
+				// "electronic candle") drive only ~7 mA through the coil at the
+				// manual's mid-pot setting, so a higher threshold left those
+				// circuits dead.  Verified against Project 3 across light levels.
+				onCurrent: 0.005,
+				offCurrent: 0.003
 			}
 		}
 	},
