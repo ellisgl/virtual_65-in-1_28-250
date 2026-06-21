@@ -48,21 +48,21 @@ bun run preview  # preview production build
 
 ### Data layer
 
-| File | Purpose |
-|------|---------|
-| `src/lib/types.ts` | Shared TypeScript types |
-| `src/lib/data/components.ts` | 65-in-1 part catalog (terminals, values, model metadata) |
+| File                                | Purpose                                                                |
+|-------------------------------------|------------------------------------------------------------------------|
+| `src/lib/types.ts`                  | Shared TypeScript types                                                |
+| `src/lib/data/components.ts`        | 65-in-1 part catalog (terminals, values, model metadata)               |
 | `src/lib/data/terminalPositions.ts` | Spring terminal coordinates in board SVG space (`viewBox 0 0 437 267`) |
 
 ### Simulation layer
 
-| File | Purpose |
-|------|---------|
-| `src/lib/sim/topology.ts` | Wire-union → node graph |
-| `src/lib/sim/netlist.ts` | Topology → SPICE-style element list |
-| `src/lib/sim/sim-rust-worklet-host.ts` | Main-thread host for the audio worklet |
-| `static/audio/sim-rust-worklet.js` | AudioWorklet — runs the WASM solver on the audio thread |
-| `static/audio/sim_wasm_bg.wasm` | Compiled Rust solver ([rust-e-sim](https://github.com/ellisgl/rust-e-sim)) |
+| File                                   | Purpose                                                                    |
+|----------------------------------------|----------------------------------------------------------------------------|
+| `src/lib/sim/topology.ts`              | Wire-union → node graph                                                    |
+| `src/lib/sim/netlist.ts`               | Topology → SPICE-style element list                                        |
+| `src/lib/sim/sim-rust-worklet-host.ts` | Main-thread host for the audio worklet                                     |
+| `static/audio/sim-rust-worklet.js`     | AudioWorklet — runs the WASM solver on the audio thread                    |
+| `static/audio/sim_wasm_bg.wasm`        | Compiled Rust solver ([rust-e-sim](https://github.com/ellisgl/rust-e-sim)) |
 
 ### Terminal placement (Inkscape workflow)
 
