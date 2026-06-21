@@ -16,6 +16,7 @@
 	import { wiresStore } from '$lib/stores/wires.svelte';
 	import { playRelayClick } from '$lib/audio/relay-click';
 	import type { DcSolution } from '$lib/types';
+	import { base } from '$app/paths';
 
 	const mappedTerminalIds = KIT_TERMINAL_IDS.filter((id) => isTerminalPositionMapped(id));
 	const TERMINAL_SNAP_RADIUS = 4;
@@ -364,7 +365,7 @@
 		audioMasterGain.connect(audioContext.destination);
 
 		try {
-			const host = new SimRustWorkletHost(audioContext);
+			const host = new SimRustWorkletHost(audioContext, base);
 			host.onSnapshot = (volts) => { workletVoltages = volts; };
 			host.onError    = (msg)   => {
 				console.error('[worklet] sim failure:', msg);
@@ -783,7 +784,7 @@
 	</div>
 
 	<div class="board-container">
-		<img src="/board.svg" alt="Science Fair 65-in-1 board artwork" class="board-image" />
+		<img src="{base}/board.svg" alt="Science Fair 65-in-1 board artwork" class="board-image" />
 		<svg
 			class="overlay"
 			viewBox={`0 0 ${BOARD_VIEWBOX_WIDTH} ${BOARD_VIEWBOX_HEIGHT}`}

@@ -79,28 +79,36 @@ export interface SpeakerFilterSettings {
 // The WASM binary is compiled once per page and shared across all host
 // instances / reconnects.  Concurrent first-callers share the in-flight
 // promise so the binary is only fetched and compiled once.
-let cachedModule: WebAssembly.Module | null = null;
-let moduleLoadPromise: Promise<WebAssembly.Module> | null = null;
+// Keyed by URL in case two deployments with different bases ever share
+// a module cache (shouldn't happen in practice, but safe to be explicit).
+const moduleCache = new Map<string, WebAssembly.Module>();
+const moduleLoadPromises = new Map<string, Promise<WebAssembly.Module>>();
 
-async function loadWasmModule(): Promise<WebAssembly.Module> {
-    if (cachedModule) return cachedModule;
-    if (moduleLoadPromise) return moduleLoadPromise;
+async function loadWasmModule(url: string): Promise<WebAssembly.Module> {
+    const cached = moduleCache.get(url);
+    if (cached) return cached;
 
-    moduleLoadPromise = (async () => {
-        const resp = await fetch('/audio/sim_wasm_bg.wasm');
+    let promise = moduleLoadPromises.get(url);
+    if (promise) return promise;
+
+    promise = (async () => {
+        const resp = await fetch(url);
         if (!resp.ok) {
-            throw new Error(`Failed to load /audio/sim_wasm_bg.wasm (${resp.status}).`);
+            throw new Error(`Failed to load ${url} (${resp.status}).`);
         }
         const bytes = await resp.arrayBuffer();
-        cachedModule = await WebAssembly.compile(bytes);
-        return cachedModule;
+        const mod = await WebAssembly.compile(bytes);
+        moduleCache.set(url, mod);
+        return mod;
     })();
 
-    return moduleLoadPromise;
+    moduleLoadPromises.set(url, promise);
+    return promise;
 }
 
 export class SimRustWorkletHost {
     private ctx: AudioContext;
+    private base: string;
     private node: AudioWorkletNode | null = null;
     private wires: WireSpec[] = [];
     private isAlreadyReady = false;
@@ -117,8 +125,15 @@ export class SimRustWorkletHost {
      */
     onDiagnosticCapture: ((capture: DiagnosticCapture) => void) | null = null;
 
-    constructor(ctx: AudioContext)  {
+    /**
+     * @param ctx      The AudioContext to connect to.
+     * @param basePath The SvelteKit `base` path (e.g. '/my-repo' on GitHub Pages,
+     *                 '' for a root deployment).  Pass `import { base } from
+     *                 '$app/paths'` from the calling component.
+     */
+    constructor(ctx: AudioContext, basePath = '')  {
         this.ctx = ctx;
+        this.base = basePath;
     }
 
     public isReady(): boolean {
@@ -142,15 +157,15 @@ export class SimRustWorkletHost {
         // AudioContext share one WorkletGlobalScope, and the polyfill
         // provides TextDecoder/TextEncoder that the wasm-bindgen glue in
         // sim-rust-worklet.js needs at module-evaluation time.
-        await this.ctx.audioWorklet.addModule('/audio/sim-worklet-polyfill.js');
-        await this.ctx.audioWorklet.addModule('/audio/sim-rust-worklet.js');
+        await this.ctx.audioWorklet.addModule(`${this.base}/audio/sim-worklet-polyfill.js`);
+        await this.ctx.audioWorklet.addModule(`${this.base}/audio/sim-rust-worklet.js`);
 
         // The compiled WASM module is passed in processorOptions so the
         // processor can mount it *synchronously* in its constructor
         // (initSync).  An earlier async init()-then-postMessage handshake
         // raced with Svelte $effects firing as soon as the host became
         // non-null, and could deadlock the first run.
-        const wasmModule = await loadWasmModule();
+        const wasmModule = await loadWasmModule(`${this.base}/audio/sim_wasm_bg.wasm`);
         this.node = new AudioWorkletNode(this.ctx, 'sim-rust-processor', {
             numberOfInputs:  0,
             numberOfOutputs: 1,
