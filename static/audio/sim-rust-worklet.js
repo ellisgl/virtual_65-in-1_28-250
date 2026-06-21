@@ -1,38 +1,44 @@
 /* eslint-disable */
 /**
- * sim-rust-worklet.js — Phase 4 audio worklet that hosts the Rust simulator
- *                       directly in the audio thread.
+ * sim-rust-worklet.js — audio worklet that hosts the Rust circuit simulator
+ *                       directly on the audio thread.
  *
- * Pipeline (compared to the Phase 3 worker+ring-buffer architecture):
+ * Each process() call steps the simulator far enough to fill one render
+ * quantum (128 samples ≈ 2.7 ms @ 48 kHz) and writes the speaker signal
+ * straight to the output — no ring buffer and no postMessage on the audio
+ * path.  (An earlier architecture ran the sim in a Web Worker and shipped
+ * batches through a ring-buffer worklet; this design replaced it.)
  *
- *   Phase 3:  Web Worker → main thread → speaker-worklet ring buffer → output
- *              ~4 ms tick batches    postMessage   cubic-interpolated readout
+ * Message protocol, main thread → worklet (via .port):
  *
- *   Phase 4:  this worklet → output
- *              one quantum (128 samples = ~2.7 ms @ 48 kHz) per process() call
- *              no buffering, no postMessage on the audio path
- *
- * Lifecycle / message protocol (driven from the main thread via .port):
- *
- *   { type: 'init',         wasmModule }    one-time WASM instantiation
- *   { type: 'configure',    netlist, kick } build Simulator, solve DC, start cold
- *   { type: 'updateControls', netlist }     hot-recompile preserving state when possible
- *   { type: 'start' }                       allow process() to advance the sim
- *   { type: 'stop' }                        freeze; output silence
+ *   { type: 'init', wasmModule }            ready-handshake (WASM itself is
+ *                                           mounted in the constructor — see
+ *                                           the note above the class)
+ *   { type: 'configure', netlist, audioProbe } build simulator, solve DC
+ *   { type: 'updateControls', netlist }     hot-recompile, preserving
+ *                                           transient state when possible
+ *   { type: 'audioProbe', probe }           'voltage' | 'current'
+ *   { type: 'setSpeakerFilter', ... }       tune/enable the resonance BPF
+ *   { type: 'startDiagnosticCapture', seconds } arm a 4-channel capture
+ *   { type: 'ping' }                        keep-alive (Chrome throttling)
+ *   { type: 'start' } / { type: 'stop' }    let process() advance / freeze
  *
  * Worklet → main thread:
  *
- *   { type: 'ready' }                       sent after init() resolves
+ *   { type: 'ready' }                       init handshake reply
  *   { type: 'snapshot', nodeVoltages }      ~30 fps for UI rendering
- *   { type: 'error', error }                catastrophic failure (post + exit gracefully)
+ *   { type: 'alive' }                       once, on the first process() call
+ *   { type: 'debug', state }                verbose state (debug mode only)
+ *   { type: 'error', error }                catastrophic failure
+ *   { type: 'diagnosticCaptureStarted' } / { type: 'diagnosticCapture', ... }
+ *   { type: 'speakerFilterUpdated', ... }   echo of applied filter settings
  *
  * Worklets cannot fetch.  AudioWorkletGlobalScope omits fetch / XHR / dynamic
- * import for network.  The main thread compiles the .wasm to a WebAssembly.Module
- * and ships it via postMessage (Modules are structured-cloneable), and we
- * pass it to wasm-bindgen's init() which accepts a precompiled module.
+ * import, so the main thread compiles the .wasm to a WebAssembly.Module and
+ * hands it over in processorOptions (Modules are structured-cloneable).
  *
- * The wasm-bindgen JS glue must be present as a sibling file (`./sim_wasm.js`).
- * The Rust build process (in the rust-e-sim repo) copies it into /static/audio/ alongside this worklet.
+ * The wasm-bindgen JS glue must be present as a sibling file (`./sim_wasm.js`);
+ * build-wasm.sh copies it into /static/audio/ alongside this worklet.
  */
 
 // ── WASM glue ────────────────────────────────────────────────────────────────
@@ -51,11 +57,6 @@
 // Dynamic `await import()` would be cleaner (run polyfill code first in
 // the same file) but is disallowed in WorkletGlobalScope — hence the
 // two-file approach.
-// import init, {
-//     Simulator as WasmSimulator,
-//     Diode as WasmDiode,
-//     Transistor as WasmTransistor,
-// } from './sim_wasm.js';
 import init,  {
     initSync,
     Simulator as WasmSimulator,
@@ -64,10 +65,16 @@ import init,  {
 } from './sim_wasm.js';
 
 // ── Audio post-processing constants ──────────────────────────────────────────
-// These mirror static/audio/speaker-worklet.js so Phase 4 audio sounds
-// indistinguishable from Phase 3 audio (modulo the actual simulator output).
+// The emit chain per sample is:  probe → DC block → [resonance BPF] → tanh.
 
-const AUDIO_SCALE     = 3;       // tanh knee (V)
+const AUDIO_SCALE     = 16;      // tanh knee (V) — higher = softer "rounded"
+                                 // clipping. At 3 the spike train slammed the
+                                 // tanh into hard saturation (~22% of samples
+                                 // flat-topped → harsh).  16 keeps the spikes
+                                 // in tanh's soft knee so the peaks round
+                                 // instead of clip flat, full bandwidth (no
+                                 // low-pass, edges/brightness preserved).
+                                 // Tradeoff: ~4.6 dB quieter than 3.
 const DC_BLOCK_R      = 0.995;   // DC-blocker coefficient (HPF ~1.5 Hz @ 48 kHz)
 const FADE_IN_SAMPLES = 256;     // ~6 ms ramp on first connect
 // Scale factor for the 'current' audio probe.  SPK1 voice-coil current
@@ -77,10 +84,44 @@ const FADE_IN_SAMPLES = 256;     // ~6 ms ramp on first connect
 // metronome circuit.
 const SPEAKER_CURRENT_SCALE = 100;
 
+// ── Speaker mechanical-resonance bandpass ────────────────────────────────────
+// Real small speakers have a strong mechanical resonance that turns the
+// spike-train output of the BJT regenerative oscillator into a continuous
+// tone near the cone's natural frequency.  Our SPK1 model is purely
+// electrical (Rvc + Lvc), so spikes pass through verbatim and can sound
+// "zippery" / clicky at the spike rate.
+//
+// This biquad bandpass (Audio EQ Cookbook, "BPF constant 0 dB peak gain")
+// sits between the DC blocker and the tanh saturator to approximate the
+// cone's response.  OFF by default: it recolors the signal toward f0,
+// which suits siren/tone circuits (P18, P45) but would wrongly color
+// e.g. the metronome's sharp ticks.  Board.svelte exposes the toggle;
+// everything is runtime-adjustable via the 'setSpeakerFilter' message.
+//
+//   f0   center frequency (Hz); 2900 matches the real kit speaker's
+//        measured resonance.
+//   Q    quality factor (ringing time ≈ Q / (π·f0)).  Deliberately broad
+//        (1.3): a sharp Q pins any swept tone to f0, flattening the
+//        siren's pitch sweep — broad keeps the sweep audible at the cost
+//        of weaker spike smoothing.
+//   gain post-filter scalar — keeps the BPF's output in the tanh's soft
+//        region.  Lower = cleaner, higher = more saturation harmonics.
+//
+const SPEAKER_FILTER_DEFAULTS = Object.freeze({
+    enabled: false,
+    f0: 2900,
+    Q:  1.3,
+    gain: 0.3,
+});
+
 // ── Solver constants ─────────────────────────────────────────────────────────
+// Adaptive timestep bounds: process() grows dt (×1.2) while Newton converges
+// quickly and shrinks it (×0.5) when iterations climb; failures retry at
+// DT_MIN with backward Euler.  20 µs max keeps ≥2 sim steps per 48 kHz
+// audio sample.
 
 const DT_MIN    = 1e-6;
-const DT_MAX    = 0.5e-3;
+const DT_MAX    = 20e-6;
 const DT_INIT   = 10e-6;
 
 const SNAPSHOT_PERIOD_SEC = 0.033;   // ~30 fps
@@ -264,16 +305,286 @@ class SimRustProcessor extends AudioWorkletProcessor {
         // through SPK1:Lvc — the physically-correct cone-driving signal.
         this.audioProbe = 'voltage';
 
-        // Boot tone — plays a 440 Hz / 0.3 amplitude sine for ~200 ms when
-        // process() first runs after worklet construction.  Lets us
-        // verify audio routing from the worklet output to the user's
-        // speakers independently of the simulator producing audio.  If
-        // you hear a beep when clicking Run, audio output works; if you
-        // don't, something downstream of the worklet is silencing it
-        // (browser autoplay, tab mute, output-device misroute, etc).
-        this.bootToneSamples = Math.round(sampleRate * 0.2);
-        this.bootTonePos     = 0;
-        this.bootToneFreq    = 440;
+        // ── Diagnostic raw-waveform capture ───────────────────────────────────────────
+        // Triggered by { type: 'startDiagnosticCapture', seconds } message.
+        // While active, records four parallel streams per audio sample:
+        //   raw:        simulator probe value, pre-DC-block, pre-everything
+        //   dcBlocked:  after DC blocker, pre-filter
+        //   postFilter: after speaker-resonance BPF, pre-tanh
+        //   postTanh:   after tanh saturator (what AudioContext receives)
+        // When the buffer fills, posts a 'diagnosticCapture' message back to
+        // the host and clears itself.  Capture is fire-and-forget — no
+        // overlapping captures supported.
+        this.diagCapture = null;
+
+        // ── Speaker mechanical-resonance BPF state ────────────────────────
+        this.speakerFilter = {
+            enabled: SPEAKER_FILTER_DEFAULTS.enabled,
+            f0:      SPEAKER_FILTER_DEFAULTS.f0,
+            Q:       SPEAKER_FILTER_DEFAULTS.Q,
+            gain:    SPEAKER_FILTER_DEFAULTS.gain,
+            // biquad coefficients (computed from f0, Q, sampleRate)
+            b0: 0, b1: 0, b2: 0, a1: 0, a2: 0,
+            // biquad state — Direct Form I:
+            //   y[n] = b0*x[n] + b1*x[n-1] + b2*x[n-2] - a1*y[n-1] - a2*y[n-2]
+            x1: 0, x2: 0, y1: 0, y2: 0,
+        };
+        this._recomputeSpeakerFilterCoeffs();
+
+        // ── Relay click voice ────────────────────────────────────────────
+        // A relay buzzer's sound IS its own contacts — there's no speaker in
+        // the circuit, so we synthesize the mechanical click here, at sample
+        // rate, and mix it into the output.  Watching relay-active edges in
+        // the step loop catches the true (kHz-range) self-interrupt rate that
+        // the ~30 fps UI snapshot path aliases away.
+        //
+        // Each edge retriggers a short voice = noise snap (fast decay) + a
+        // damped body resonance.  Energize is brighter/louder than release.
+        // `relayClick.env` counts down samples; <=0 means silent.
+        this.relayActivePrev = null;       // last-seen relay-active byte (null until first read)
+        this.relayClick = {
+            env: 0,            // remaining samples in the current click
+            len: 0,            // total length of the current click (samples)
+            phase: 0,          // body-resonance phase accumulator (radians)
+            omega: 0,          // body-resonance angular step (rad/sample)
+            snapTau: 0,        // noise-decay time constant (samples)
+            bodyTau: 0,        // body-decay time constant (samples)
+            level: 0,          // peak amplitude of this click
+        };
+
+        // Synthesized AM radio receiver (set up lazily by _configureRadio when
+        // a radio topology is detected; null = not a radio circuit).
+        this.radio = null;
+        this.radioStations = null;
+    }
+
+    /**
+     * Retrigger the relay-click voice for an energize (true) or release
+     * (false) transition.  Parameters mirror the JS-side relay-click.ts so
+     * the buzzer and single UI clicks sound like the same relay.
+     */
+    _triggerRelayClick(energized) {
+        const sr = sampleRate;
+        const c = this.relayClick;
+        c.len     = Math.floor(0.02 * sr);             // 20 ms voice
+        c.env     = c.len;
+        c.phase   = 0;
+        c.omega   = 2 * Math.PI * (energized ? 1900 : 1250) / sr;
+        c.snapTau = (energized ? 0.0018 : 0.0024) * sr;
+        c.bodyTau = (energized ? 0.006  : 0.007 ) * sr;
+        c.level   = energized ? 0.30 : 0.18;
+    }
+
+    /**
+     * One sample of the relay-click voice, or 0 when idle.  Advances state.
+     */
+    _relayClickSample() {
+        const c = this.relayClick;
+        if (c.env <= 0) return 0;
+        const age = c.len - c.env;                     // samples since trigger
+        const snap = (Math.random() * 2 - 1) * Math.exp(-age / c.snapTau);
+        const body = 0.6 * Math.sin(c.phase) * Math.exp(-age / c.bodyTau);
+        c.phase += c.omega;
+        c.env--;
+        return (snap + body) * c.level;
+    }
+
+    // ── Synthesized AM radio receiver ────────────────────────────────────
+    // A crystal radio can't be simulated (the carriers are ~MHz RF and the
+    // antenna/coil aren't modeled as circuit elements), so when the netlist
+    // reports a radio topology we abandon the solver for the audio path and
+    // synthesize what the earphone would hear: a bank of fixed-carrier
+    // "stations", each tuned in/out by how close the tank's resonant
+    // frequency (netlist.radio.tuningHz, which tracks the variable cap) sits
+    // to that station's carrier.  Between stations you get static.
+
+    _initRadio() {
+        // Build a Morse key schedule (on/off segments) from a short message.
+        const MORSE = { A:'.-', C:'-.-.', D:'-..', E:'.', M:'--', O:'---', Q:'--.-', R:'.-.', S:'...', T:'-' };
+        const dot = 0.07, dash = 0.21, intra = 0.07, inter = 0.21, word = 0.49;
+        const key = [];
+        const msg = 'CQ CQ DE ';
+        for (const ch of msg) {
+            if (ch === ' ') { key.push([false, word]); continue; }
+            const code = MORSE[ch] || '';
+            for (let k = 0; k < code.length; k++) {
+                key.push([true, code[k] === '.' ? dot : dash]);
+                key.push([false, k === code.length - 1 ? inter : intra]);
+            }
+        }
+
+        // Station carriers chosen to fall inside the achievable tuning sweep
+        // (~700–1500 kHz for this kit's 220 µH tank + 51–235 pF), with dead
+        // air beyond both ends.  Each gets a distinct synthesized "program".
+        const mkSt = () => ({ t: 0, phase: 0,
+            noteIdx: 0, noteTimer: 0, noteAge: 0, noteFreq: 0,
+            syl: 0, sylTarget: 0, sylTimer: 0, nLP: 0, nHP: 0,
+            sec: 0, keyIdx: 0, keyTimer: 0, keyOn: false });
+        this.radioStations = [
+            { carrier: 720e3,  type: 'music',  strength: 1.0,  st: mkSt() },
+            { carrier: 850e3,  type: 'talk',   strength: 0.9,  st: mkSt() },
+            { carrier: 1000e3, type: 'time',   strength: 1.0,  st: mkSt() },
+            { carrier: 1150e3, type: 'music2', strength: 0.85, st: mkSt() },
+            { carrier: 1320e3, type: 'morse',  strength: 0.8,  st: mkSt(), key },
+            { carrier: 1450e3, type: 'weak',   strength: 0.5,  st: mkSt() }
+        ];
+        this.radioMixLP = 0;        // treble-loss low-pass state
+        this.radioInvSr = 1 / sampleRate;
+    }
+
+    /** Set up / refresh the receiver from a netlist.radio descriptor. */
+    _configureRadio(radio) {
+        if (radio && radio.enabled) {
+            if (!this.radioStations) this._initRadio();
+            this.radio = {
+                enabled: true,
+                tuningHz: radio.tuningHz || 0,
+                bandLoHz: radio.bandLoHz || 0,
+                bandHiHz: radio.bandHiHz || 0
+            };
+        } else {
+            this.radio = null;
+        }
+    }
+
+    /** One audio sample of one station's program (baseband, ~[-1, 1]). */
+    _stationProgram(s) {
+        const st = s.st;
+        const dt = this.radioInvSr;
+        st.t += dt;
+        const TWO_PI = 2 * Math.PI;
+        switch (s.type) {
+            case 'music':
+            case 'weak': {
+                // Looping arpeggio over a major-ish scale; soft plucked env.
+                const scale = [0, 4, 7, 12, 7, 4];   // semitone offsets
+                const base = s.type === 'weak' ? 196 : 220;
+                if (st.noteTimer <= 0) {
+                    st.noteFreq = base * Math.pow(2, scale[st.noteIdx % scale.length] / 12);
+                    st.noteIdx++;
+                    st.noteTimer = 0.22;
+                    st.noteAge = 0;
+                    st.phase = 0;
+                }
+                st.noteTimer -= dt;
+                st.noteAge += dt;
+                const env = Math.exp(-st.noteAge * 4) * (1 - Math.exp(-st.noteAge * 90));
+                st.phase += TWO_PI * st.noteFreq * dt;
+                return env * (Math.sin(st.phase) + 0.3 * Math.sin(2 * st.phase) + 0.15 * Math.sin(3 * st.phase));
+            }
+            case 'music2': {
+                // Slower triad arpeggio, reedier (odd harmonics), lower key.
+                const triad = [0, 7, 12, 7, 4, 0];
+                if (st.noteTimer <= 0) {
+                    st.noteFreq = 165 * Math.pow(2, triad[st.noteIdx % triad.length] / 12);
+                    st.noteIdx++;
+                    st.noteTimer = 0.30;
+                    st.noteAge = 0;
+                    st.phase = 0;
+                }
+                st.noteTimer -= dt;
+                st.noteAge += dt;
+                const env = Math.exp(-st.noteAge * 2.5) * (1 - Math.exp(-st.noteAge * 60));
+                st.phase += TWO_PI * st.noteFreq * dt;
+                return 0.9 * env * (Math.sin(st.phase) + 0.4 * Math.sin(3 * st.phase) + 0.2 * Math.sin(5 * st.phase));
+            }
+            case 'talk': {
+                // Band-limited noise gated by a syllabic envelope → muffled
+                // speech cadence.
+                if (st.sylTimer <= 0) {
+                    st.sylTarget = Math.random() < 0.28 ? 0 : 0.4 + Math.random() * 0.6;
+                    st.sylTimer = 0.08 + Math.random() * 0.18;
+                }
+                st.sylTimer -= dt;
+                st.syl += (st.sylTarget - st.syl) * 0.02;     // smooth gate
+                const wn = Math.random() * 2 - 1;
+                st.nLP += (wn - st.nLP) * 0.45;                // crude low-pass
+                return st.syl * st.nLP * 0.9;
+            }
+            case 'time': {
+                // WWV-like: quiet background tone + a tick at the top of each
+                // second.
+                st.sec += dt;
+                if (st.sec >= 1) st.sec -= 1;
+                const tickOn = st.sec < 0.04;
+                st.phase += TWO_PI * (tickOn ? 1000 : 500) * dt;
+                return (tickOn ? 0.6 : 0.12) * Math.sin(st.phase);
+            }
+            case 'morse': {
+                // Keyed 700 Hz tone following the precomputed schedule.
+                if (st.keyTimer <= 0) {
+                    const seg = s.key[st.keyIdx % s.key.length];
+                    st.keyOn = seg[0];
+                    st.keyTimer = seg[1];
+                    st.keyIdx++;
+                }
+                st.keyTimer -= dt;
+                st.phase += TWO_PI * 700 * dt;
+                return st.keyOn ? 0.5 * Math.sin(st.phase) : 0;
+            }
+            default:
+                return 0;
+        }
+    }
+
+    /** One fully-mixed receiver output sample (already scaled for output). */
+    _radioSample() {
+        const HALF_BW = 12e3;        // station capture half-bandwidth (Hz)
+        const OUT_LEVEL = 0.16;      // worklet output level (Board master ×4)
+        const f = this.radio.tuningHz;
+
+        let mix = 0;
+        let bestW = 0;
+        for (const s of this.radioStations) {
+            const d = (f - s.carrier) / HALF_BW;
+            const w = 1 / (1 + d * d);               // Lorentzian selectivity
+            if (w > bestW) bestW = w;
+            if (w < 0.02) continue;                  // negligible — skip synth
+            mix += this._stationProgram(s) * w * s.strength;
+        }
+
+        // Treble comes in as you tune in: low-pass cutoff rises with quality.
+        const cutoff = 700 + (4500 - 700) * Math.sqrt(bestW);
+        const rc = 1 / (2 * Math.PI * cutoff);
+        const alpha = this.radioInvSr / (rc + this.radioInvSr);
+        this.radioMixLP += alpha * (mix - this.radioMixLP);
+
+        // Static: hiss louder between stations, plus the odd atmospheric crackle.
+        const hiss = (Math.random() * 2 - 1) * (0.05 + 0.5 * (1 - bestW));
+        let crackle = 0;
+        if (Math.random() < 0.0006) crackle = (Math.random() * 2 - 1) * 0.4 * (1 - bestW * 0.5);
+
+        return (this.radioMixLP + hiss + crackle) * OUT_LEVEL;
+    }
+
+    /**
+     * Recompute the BPF biquad coefficients from current f0/Q/sampleRate
+     * using the Audio EQ Cookbook's "BPF (constant 0 dB peak gain)" form.
+     * Call after any change to f0 or Q.  State variables are NOT reset —
+     * the filter retains its memory across coefficient updates so live
+     * tuning doesn't produce clicks.
+     */
+    _recomputeSpeakerFilterCoeffs() {
+        const sf = this.speakerFilter;
+        const w0    = (2 * Math.PI * sf.f0) / sampleRate;
+        const cos_w = Math.cos(w0);
+        const sin_w = Math.sin(w0);
+        const alpha = sin_w / (2 * Math.max(0.1, sf.Q));   // clamp Q to avoid divide-by-zero
+        const a0    = 1 + alpha;
+        sf.b0 =  alpha       / a0;
+        sf.b1 =  0;
+        sf.b2 = -alpha       / a0;
+        sf.a1 = (-2 * cos_w) / a0;
+        sf.a2 = (1 - alpha)  / a0;
+    }
+
+    /**
+     * Reset only the biquad's IIR state.  Use when restarting the sim from
+     * scratch so leftover ringing from the previous run doesn't bleed in.
+     */
+    _resetSpeakerFilterState() {
+        const sf = this.speakerFilter;
+        sf.x1 = 0; sf.x2 = 0; sf.y1 = 0; sf.y2 = 0;
     }
 
     post(msg) {
@@ -283,8 +594,22 @@ class SimRustProcessor extends AudioWorkletProcessor {
     async onmessage(msg) {
         if (!msg || !msg.type) return;
 
+        // Allow the host to enable diagnostic logging inside this
+        // AudioWorkletGlobalScope (which is a separate JS realm from the
+        // main thread, so setting globalThis.__simDebug in DevTools has
+        // no effect here).
+        if (typeof msg.debug === 'boolean') globalThis.__simDebug = msg.debug;
+
         try {
             switch (msg.type) {
+                case 'init':
+                    console.log(`[${new Date().toISOString()}] [worklet] init received (running: ${this.running})`);
+                    this.wasmReady = true;
+                    // DO NOT set this.running = false here!  It races with
+                    // the host's start() call during first connect.
+                    this.port.postMessage({ type: 'ready' });
+                    break;
+
                 case 'configure':
                     this.configureCount++;
                     try {
@@ -296,13 +621,15 @@ class SimRustProcessor extends AudioWorkletProcessor {
                         this.sim = buildSimulator(msg.netlist);
                         this.elementCount = msg.netlist?.elements?.length || 0;
                         if (this.sim) {
-                            this.sim.solve_dc();
+                            const dcOk = this.sim.solve_dc();
                             this.cacheSpeakerProbes(msg.netlist);
+                            this._configureRadio(msg.netlist.radio);
                             this.knownNodeIds = collectTopologyNodeIds(msg.netlist);
                             this.groundNodeId = msg.netlist.groundNodeId;
                             this.lastConfigureStatus = 'success';
                             console.log('[worklet] configure: simulator built with',
-                                msg.netlist?.elements?.length, 'elements, DC solved');
+                                msg.netlist?.elements?.length, 'elements, DC',
+                                dcOk ? 'converged' : 'DID NOT CONVERGE (transient runs from partial state)');
                         } else {
                             this.lastConfigureStatus = 'failed_null_sim';
                             console.warn('[worklet] configure: buildSimulator returned null (empty/invalid netlist)');
@@ -319,6 +646,9 @@ class SimRustProcessor extends AudioWorkletProcessor {
                     this.prevV = 0;
                     this.audioPhase = 0;
                     this.fadePos = 0;
+                    this.relayActivePrev = null;
+                    this.relayClick.env = 0;
+                    this._resetSpeakerFilterState();
                     this.didFirstQuantumReport = false;
                     this.errorReported = false;
                     break;
@@ -335,6 +665,43 @@ class SimRustProcessor extends AudioWorkletProcessor {
                         this.onmessage({ type: 'configure', netlist: msg.netlist });
                         break;
                     }
+
+                    // Performance Optimization: If the number of elements hasn't
+                    // changed, attempt an incremental update via the WASM
+                    // Simulator's native update methods. This avoids the
+                    // heavy structured-clone of the state vectors and the
+                    // cost of full LU pattern re-analysis.
+                    const isIncremental = msg.netlist && msg.netlist.elements &&
+                                          msg.netlist.elements.length === (this.elementCount || 0);
+
+                    if (isIncremental) {
+                        let ok = true;
+                        for (const el of msg.netlist.elements) {
+                            if (el.type === 'resistor') {
+                                if (!this.sim.update_resistor(el.componentId, el.resistanceOhms)) {
+                                    ok = false; break;
+                                }
+                            } else if (el.type === 'voltage-source') {
+                                if (!this.sim.update_voltage_source(el.componentId, el.voltage)) {
+                                    ok = false; break;
+                                }
+                            } else {
+                                // For caps, inductors, transistors, etc., we
+                                // still need a full rebuild because their
+                                // model params are currently static in the
+                                // WASM core.
+                                ok = false; break;
+                            }
+                        }
+                        if (ok) {
+                            if (this.sim.compile()) {
+                                // Successfully updated parameters in-place!
+                                break;
+                            }
+                        }
+                    }
+
+                    // Fullback: Full rebuild with state transfer.
                     const snap = {
                         nodeVolts:            this.sim.export_node_volts(),
                         prevNodeVolts:        this.sim.export_prev_node_volts(),
@@ -353,6 +720,7 @@ class SimRustProcessor extends AudioWorkletProcessor {
                         // probably needs to re-configure entirely.
                         break;
                     }
+                    this.elementCount = msg.netlist?.elements?.length || 0;
                     newSim.import_node_volts(snap.nodeVolts);
                     newSim.import_prev_node_volts(snap.prevNodeVolts);
                     newSim.import_cap_volts(snap.capVolts);
@@ -366,6 +734,7 @@ class SimRustProcessor extends AudioWorkletProcessor {
                     this.disposeSim();
                     this.sim = newSim;
                     this.cacheSpeakerProbes(msg.netlist);
+                    this._configureRadio(msg.netlist.radio);
                     this.knownNodeIds = collectTopologyNodeIds(msg.netlist);
                     this.groundNodeId = msg.netlist.groundNodeId;
                     break;
@@ -375,12 +744,63 @@ class SimRustProcessor extends AudioWorkletProcessor {
                     this.audioProbe = msg.probe;
                     break;
 
+                case 'setSpeakerFilter': {
+                    // Live-tune the speaker-resonance bandpass.
+                    // Accepts any subset of { enabled, f0, Q, gain }.
+                    // Unspecified fields are left at their current values.
+                    const sf = this.speakerFilter;
+                    if (typeof msg.enabled === 'boolean') sf.enabled = msg.enabled;
+                    if (typeof msg.f0      === 'number' && msg.f0 > 0)   sf.f0   = msg.f0;
+                    if (typeof msg.Q       === 'number' && msg.Q  > 0.1) sf.Q    = msg.Q;
+                    if (typeof msg.gain    === 'number' && msg.gain >= 0) sf.gain = msg.gain;
+                    this._recomputeSpeakerFilterCoeffs();
+                    // Note: state intentionally NOT reset — keeps tuning
+                    // smooth/glitch-free.
+                    if (globalThis.__simDebug) {
+                        console.log('[worklet] speaker filter:',
+                                    sf.enabled ? `f0=${sf.f0}Hz Q=${sf.Q} gain=${sf.gain}` : 'disabled');
+                    }
+                    this.post({
+                        type: 'speakerFilterUpdated',
+                        enabled: sf.enabled, f0: sf.f0, Q: sf.Q, gain: sf.gain,
+                    });
+                    break;
+                }
+
+                case 'startDiagnosticCapture': {
+                    // Allocate four Float32Arrays sized for the requested
+                    // capture duration.  ~768 KB at 1s/48kHz/4-channel —
+                    // small enough to clone cheaply across postMessage.
+                    const seconds = Math.max(0.05, Math.min(10.0, Number(msg.seconds) || 1.0));
+                    const total   = Math.ceil(seconds * sampleRate);
+                    this.diagCapture = {
+                        raw:        new Float32Array(total),
+                        dcBlocked:  new Float32Array(total),
+                        postFilter: new Float32Array(total),
+                        postTanh:   new Float32Array(total),
+                        pos:        0,
+                        total,
+                        sampleRate,
+                    };
+                    if (globalThis.__simDebug) {
+                        console.log('[worklet] diagnostic capture armed:',
+                                    seconds + 's =', total, 'samples');
+                    }
+                    this.post({ type: 'diagnosticCaptureStarted', total, sampleRate });
+                    break;
+                }
+
+                case 'ping':
+                    // No-op to keep the port/event-loop active.
+                    break;
+
                 case 'start':
+                    console.log(`[${new Date().toISOString()}] [worklet] start received`);
                     // Only run if WASM mounted cleanly in the constructor.
                     if (this.wasmReady) this.running = true;
                     break;
-
                 case 'stop':
+                    console.log(`[${new Date().toISOString()}] [worklet] stop received`);
                     this.running = false;
                     break;
             }
@@ -390,35 +810,52 @@ class SimRustProcessor extends AudioWorkletProcessor {
     }
 
     cacheSpeakerProbes(netlist) {
-        // Approximation: SPK1 is two resistor segments (Rvc + Lvc midpoint).
-        // The simplest heuristic is to look at the netlist's resistor IDs and
-        // find the two SPK1 endpoints.  If the topology builder named them
-        // 'SPK1:Rvc' / 'SPK1:Lvc' (kit convention) we read the outer nodes.
-        // Failing that, the worker also exports node IDs for the T1 primary
-        // (terminal 70) and centre tap (terminal 71) via the message.
         this.speakerTopA = -1; this.speakerTopB = -1;
         this.t1PrimaryTop = -1; this.t1CenterTop = -1;
+        this.earphoneA = -1; this.earphoneB = -1;
 
-        let spkRvcOuter = null, spkLvcOuter = null;
+        // The speaker is modeled as nodeA --[Rvc]-- midNode --[Lvc]-- nodeB.
+        // We want to probe [nodeA, nodeB] to get the full voltage across the coil.
+        let nodeA = -1, nodeB = -1;
         for (const el of netlist.elements) {
-            if (el.type === 'resistor' && el.componentId === 'SPK1:Rvc') {
-                spkRvcOuter = el.nodes[0];  // outer end of Rvc
-            } else if (el.type === 'inductor' && el.componentId === 'SPK1:Lvc') {
-                spkLvcOuter = el.nodes[1];  // outer end of Lvc
+            if (el.componentId === 'SPK1:Rvc') nodeA = el.nodes[0];
+            if (el.componentId === 'SPK1:Lvc') nodeB = el.nodes[1];
+        }
+
+        // The piezo earphone (EAR1) is a cap ∥ resistor across two terminals;
+        // its audio output is simply the voltage across those nodes.
+        for (const el of netlist.elements) {
+            if (el.componentId === 'EAR1:C') {
+                this.earphoneA = el.nodes[0];
+                this.earphoneB = el.nodes[1];
+                break;
             }
         }
-        if (spkRvcOuter !== null && spkLvcOuter !== null) {
-            this.speakerTopA = spkRvcOuter;
-            this.speakerTopB = spkLvcOuter;
+
+        if (nodeA !== -1 && nodeB !== -1) {
+            this.speakerTopA = nodeA;
+            this.speakerTopB = nodeB;
+            if (globalThis.__simDebug) console.log(`[worklet] Probe: found SPK1 outer nodes [${nodeA}, ${nodeB}]`);
         }
 
         // T1 primary/centre — look for the LT700 winding-resistor pattern.
         for (const el of netlist.elements) {
             if (el.type === 'resistor' && el.componentId === 'T1:Rp1') {
-                this.t1PrimaryTop = el.nodes[0];   // upstream of Rp1 = primaryStart
+                this.t1PrimaryTop = el.nodes[0];
             }
             if (el.type === 'inductor' && el.componentId === 'T1:Lp1') {
-                this.t1CenterTop = el.nodes[1];    // downstream of Lp1 = primaryCenterTap
+                this.t1CenterTop = el.nodes[1];
+            }
+        }
+
+        if (this.speakerTopA === -1 && this.t1PrimaryTop === -1) {
+            for (const el of netlist.elements) {
+                if (el.type === 'inductor' || el.type === 'transformer') {
+                    this.speakerTopA = el.nodes[0];
+                    this.speakerTopB = el.nodes[1];
+                    console.log(`[worklet] Probe fallback: using ${el.type} ${el.componentId} nodes [${el.nodes[0]}, ${el.nodes[1]}]`);
+                    break;
+                }
             }
         }
     }
@@ -452,8 +889,17 @@ class SimRustProcessor extends AudioWorkletProcessor {
                 real_sim_nan = true;
             } else {
                 v = va - vb;
-                if (Math.abs(v) > 0.001) v_ok = true;
-                // else: speaker is quiet → fall through to T1 below
+                v_ok = true;
+            }
+        } else if (this.earphoneA >= 0 || this.earphoneB >= 0) {
+            // No speaker present — listen to the piezo earphone (EAR1) instead.
+            const va = this.earphoneA >= 0 ? this.sim.node_voltage(this.earphoneA) : 0;
+            const vb = this.earphoneB >= 0 ? this.sim.node_voltage(this.earphoneB) : 0;
+            if (Number.isNaN(va) || Number.isNaN(vb)) {
+                real_sim_nan = true;
+            } else {
+                v = va - vb;
+                v_ok = true;
             }
         }
         if (!v_ok && !real_sim_nan && (this.t1PrimaryTop >= 0 || this.t1CenterTop >= 0)) {
@@ -495,29 +941,45 @@ class SimRustProcessor extends AudioWorkletProcessor {
 
     process(_inputs, outputs, _params) {
         try {
-            if (this._debugCount === undefined) this._debugCount = 0;
-            if (this._debugCount % 375 === 0) {
-                // Heartbeat to host every ~375 quanta (~1s at 48kHz/128)
-                this.post({
-                    type: 'debug',
-                    state: {
-                        running: this.running,
-                        hasSim: !!this.sim,
-                        wasmReady: this.wasmReady,
-                        bootTonePos: this.bootTonePos,
-                        speakerA: this.speakerTopA,
-                        speakerB: this.speakerTopB,
-                        t1P: this.t1PrimaryTop,
-                        t1C: this.t1CenterTop,
-                        audioProbe: this.audioProbe,
-                        configureCount: this.configureCount,
-                        lastConfigureStatus: this.lastConfigureStatus,
-                        lastError: this.lastError,
-                        elementCount: this.elementCount
-                    }
-                });
+            // One-shot "process() is alive" beacon. Posted on the very
+            // first quantum regardless of __simDebug so we can always
+            // confirm from the host whether the audio thread is being
+            // scheduled (vs. silently never running, which is hard to
+            // distinguish from "simulator produces zero output").
+            if (!this._postedAliveBeacon) {
+                this._postedAliveBeacon = true;
+                this.post({ type: 'alive', running: this.running, hasSim: !!this.sim, wasmReady: this.wasmReady });
             }
-            this._debugCount++;
+            // Heartbeat is disabled by default. DevTools-attached
+            // renderers stall the AudioWorklet when the main thread
+            // performs console formatting on each postMessage — the
+            // exact symptom is "audio cuts out ~500 ms after start
+            // when DevTools is open, but works fine when it's closed".
+            // Set globalThis.__simDebug = true from the host before
+            // calling start() if you need the heartbeat back.
+            if (globalThis.__simDebug) {
+                if (this._debugCount === undefined) this._debugCount = 0;
+                if (this._debugCount % 375 === 0) {
+                    this.post({
+                        type: 'debug',
+                        state: {
+                            running: this.running,
+                            hasSim: !!this.sim,
+                            wasmReady: this.wasmReady,
+                            speakerA: this.speakerTopA,
+                            speakerB: this.speakerTopB,
+                            t1P: this.t1PrimaryTop,
+                            t1C: this.t1CenterTop,
+                            audioProbe: this.audioProbe,
+                            configureCount: this.configureCount,
+                            lastConfigureStatus: this.lastConfigureStatus,
+                            lastError: this.lastError,
+                            elementCount: this.elementCount
+                        }
+                    });
+                }
+                this._debugCount++;
+            }
 
             return this._processBody(_inputs, outputs, _params);
         } catch (err) {
@@ -548,6 +1010,24 @@ class SimRustProcessor extends AudioWorkletProcessor {
     }
 
     _processBody(_inputs, outputs, _params) {
+        if (globalThis.__simDebug) {
+            this._processCount = (this._processCount || 0) + 1;
+            if (this._processCount % 100 === 0) console.log('[worklet] process() call', this._processCount, 'running:', this.running);
+        }
+        if (globalThis.__simDebug && this.running && this.sim && this.wasmReady) {
+            this._debugLastRun = true;
+        } else if (globalThis.__simDebug && this._debugLastRun) {
+            this._debugLastRun = false;
+            console.log('[worklet debug]:', {
+                running: this.running,
+                hasSim: !!this.sim,
+                wasmReady: this.wasmReady,
+                speakerA: this.speakerTopA,
+                speakerB: this.speakerTopB,
+                adaptiveDt: this.adaptiveDt,
+                audioPhase: this.audioPhase
+            });
+        }
         const out = outputs[0];
         if (!out || out.length === 0) return true;
         const ch0 = out[0];
@@ -564,21 +1044,19 @@ class SimRustProcessor extends AudioWorkletProcessor {
             return true;
         }
 
-        // Boot tone — for the first ~200ms after process() starts running,
-        // emit a 440 Hz / 0.3 amplitude sine wave.  This is an audio-
-        // routing probe: if you hear a clean A4 beep when clicking Run,
-        // output is wired correctly.  If you don't, the bug is downstream
-        // of this worklet's output.  Once bootTonePos exhausts, all
-        // subsequent quanta run normal sim audio.
-        if (this.bootTonePos < this.bootToneSamples) {
-            const omega = 2 * Math.PI * this.bootToneFreq / sampleRate;
+        // Radio fast-path: a crystal-radio circuit has no simulatable audio
+        // (the RF and antenna/coil aren't modeled), so synthesize the received
+        // signal directly and skip the solver entirely.  tuningHz was set from
+        // the netlist on configure/updateControls and tracks the tuning knob.
+        if (this.radio && this.radio.enabled) {
             for (let i = 0; i < frames; i++) {
-                const s = (this.bootTonePos < this.bootToneSamples)
-                    ? 0.3 * Math.sin(omega * this.bootTonePos)
-                    : 0;
+                let s = this._radioSample();
+                if (this.fadePos < FADE_IN_SAMPLES) {
+                    s *= this.fadePos / FADE_IN_SAMPLES;
+                    this.fadePos++;
+                }
                 ch0[i] = s;
                 for (let c = 1; c < out.length; c++) out[c][i] = s;
-                this.bootTonePos++;
             }
             return true;
         }
@@ -596,24 +1074,32 @@ class SimRustProcessor extends AudioWorkletProcessor {
             this.activeFramesSinceLog = 0;
             this.tickEdgesSinceLog = 0;
             this.lastWasActive = false;
-            console.log('[worklet] first quantum:',
-                'speakerTopA=', this.speakerTopA,
-                'speakerTopB=', this.speakerTopB,
-                'audioProbe=', this.audioProbe,
-            );
+            if (globalThis.__simDebug) {
+                console.log('[worklet] first quantum:',
+                    'speakerTopA=', this.speakerTopA,
+                    'speakerTopB=', this.speakerTopB,
+                    'audioProbe=', this.audioProbe,
+                );
+            }
         }
         this.framesSinceLog += frames;
+        if (globalThis.__simDebug && this.framesSinceLog % 100 === 0) {
+            console.log('[worklet debug] accumulation:', this.framesSinceLog);
+        }
         if (this.framesSinceLog >= sampleRate) {
             const spkPp = this.spkMaxSinceLog - this.spkMinSinceLog;
             const outPp = this.outMaxSinceLog - this.outMinSinceLog;
             const activePct = (this.activeFramesSinceLog / this.framesSinceLog) * 100;
             const tickHz = this.tickEdgesSinceLog * sampleRate / this.framesSinceLog;
-            if (Number.isFinite(spkPp) || Number.isFinite(outPp) || activePct > 0) {
+            if (globalThis.__simDebug) {
                 const simNan = this.simNanCount || 0;
+                const vA = this.speakerTopA >= 0 ? this.sim.node_voltage(this.speakerTopA) : 0;
+                const vB = this.speakerTopB >= 0 ? this.sim.node_voltage(this.speakerTopB) : 0;
                 console.log(
                     `[worklet] last 1s: ` +
                     `active=${activePct.toFixed(1)}% events=${this.tickEdgesSinceLog} (≈${tickHz.toFixed(1)}Hz) ` +
                     `simNaN=${simNan} ` +
+                    `vA=${vA.toFixed(3)} vB=${vB.toFixed(3)} ` +
                     `spk[${this.spkMinSinceLog.toFixed(2)}..${this.spkMaxSinceLog.toFixed(2)}]=${spkPp.toFixed(2)} ` +
                     `out[${this.outMinSinceLog.toFixed(3)}..${this.outMaxSinceLog.toFixed(3)}]=${outPp.toFixed(3)} ` +
                     `dcPrevOut=${this.dcPrevOut.toFixed(3)}`
@@ -639,6 +1125,18 @@ class SimRustProcessor extends AudioWorkletProcessor {
 
         // Cache bandpass state in registers.
         const emit = (rawSpkV) => {
+            // Check for NaN and count it — helps diagnose solver explosions.
+            if (Number.isNaN(rawSpkV)) {
+                this.simNanCount = (this.simNanCount || 0) + 1;
+                rawSpkV = 0;
+            }
+
+            // Diagnostic capture: raw simulator voltage (pre-everything).
+            const cap = this.diagCapture;
+            if (cap !== null && cap.pos < cap.total) {
+                cap.raw[cap.pos] = rawSpkV;
+            }
+
             // Track speaker-V swing for the periodic log.
             if (rawSpkV < this.spkMinSinceLog) this.spkMinSinceLog = rawSpkV;
             if (rawSpkV > this.spkMaxSinceLog) this.spkMaxSinceLog = rawSpkV;
@@ -657,12 +1155,89 @@ class SimRustProcessor extends AudioWorkletProcessor {
             if (!Number.isFinite(dcBlocked)) dcBlocked = 0;
             this.dcPrevIn  = rawSpkV;
             this.dcPrevOut = dcBlocked;
-            // Audio chain: DC block → tanh saturator → fade-in.
-            let s = Math.tanh(dcBlocked / AUDIO_SCALE);
+
+            // Diagnostic capture: post-DC-block, pre-tanh.
+            if (cap !== null && cap.pos < cap.total) {
+                cap.dcBlocked[cap.pos] = dcBlocked;
+            }
+
+            // ── Speaker mechanical-resonance bandpass ───────────────────
+            // Sits between DC blocker and tanh.  Models the cone's natural
+            // resonance, converting the simulator's spike-train output into
+            // a continuous tone at ~f0 (default 2800 Hz).  Real small
+            // speakers do this acoustically; our SPK1 model is purely
+            // electrical, so we apply the equivalent shaping in the audio
+            // chain.  Bypassable via `setSpeakerFilter { enabled: false }`.
+            const sf = this.speakerFilter;
+            let filtered;
+            if (sf.enabled) {
+                // Direct-Form-I biquad, b1=0 so the x[n-1] term drops out.
+                filtered = sf.b0 * dcBlocked
+                         + sf.b2 * sf.x2
+                         - sf.a1 * sf.y1
+                         - sf.a2 * sf.y2;
+                if (!Number.isFinite(filtered)) filtered = 0;
+                // Shift state.
+                sf.x2 = sf.x1;  sf.x1 = dcBlocked;
+                sf.y2 = sf.y1;  sf.y1 = filtered;
+                // Apply post-filter gain — brings the BPF's output amplitude
+                // into the tanh's linear region.
+                filtered *= sf.gain;
+            } else {
+                filtered = dcBlocked;
+            }
+
+            // Diagnostic capture: post-filter, pre-tanh.
+            if (cap !== null && cap.pos < cap.total) {
+                cap.postFilter[cap.pos] = filtered;
+            }
+
+            // Audio chain: tanh saturator → fade-in.
+            let s = Math.tanh(filtered / AUDIO_SCALE);
             // Fade-in on first connect.
             if (this.fadePos < FADE_IN_SAMPLES) {
                 s *= this.fadePos / FADE_IN_SAMPLES;
                 this.fadePos++;
+            }
+
+            // Mix in the relay click voice (additive — it's a parallel
+            // mechanical sound, not part of the simulated electrical path,
+            // so it bypasses the speaker filter and tanh).  Clamp to keep
+            // the sum inside the AudioContext's [-1, 1] range.
+            const clickSample = this._relayClickSample();
+            if (clickSample !== 0) {
+                s += clickSample;
+                if (s >  1) s =  1;
+                else if (s < -1) s = -1;
+            }
+
+            // Diagnostic capture: post-tanh (= what AudioContext receives).
+            if (cap !== null && cap.pos < cap.total) {
+                cap.postTanh[cap.pos] = s;
+                cap.pos++;
+                if (cap.pos >= cap.total) {
+                    // Buffer is full — ship it back to the host and clear.
+                    // Transfer ownership of the underlying ArrayBuffers
+                    // (cheap; avoids ~768 KB of structured-clone copying).
+                    this.port.postMessage(
+                        {
+                            type: 'diagnosticCapture',
+                            sampleRate: cap.sampleRate,
+                            samplesPerChannel: cap.total,
+                            raw:        cap.raw,
+                            dcBlocked:  cap.dcBlocked,
+                            postFilter: cap.postFilter,
+                            postTanh:   cap.postTanh,
+                        },
+                        [cap.raw.buffer, cap.dcBlocked.buffer,
+                         cap.postFilter.buffer, cap.postTanh.buffer],
+                    );
+                    this.diagCapture = null;
+                    if (globalThis.__simDebug) {
+                        console.log('[worklet] diagnostic capture delivered:',
+                                    cap.total, 'samples per channel');
+                    }
+                }
             }
 
             // Track output amplitude for the periodic log.  NaN handling:
@@ -681,7 +1256,6 @@ class SimRustProcessor extends AudioWorkletProcessor {
         };
 
         while (frame < frames) {
-
             // Emit any audio samples that fall at or before current sim time.
             if (nextT <= simT + 1e-14) {
                 emit(prevV);
@@ -695,25 +1269,69 @@ class SimRustProcessor extends AudioWorkletProcessor {
             // point (transistor at the edge of saturation, relay mid-flap,
             // etc).  The state is preserved on failure — but if we retry
             // from the same state with the same dt, we hit the same
-            // singularity forever.  Recovery: solve_dc() finds a fresh
-            // valid operating point AND clears gear2_ready inside the sim,
-            // so the next step_with_gear(dt, 2) uses BE for one step
-            // (BE is more numerically robust at the cost of order).  We
-            // lose the brief transient region we were in (audio may have a
-            // tiny glitch) but the worklet keeps producing sound.
-            const stepDt = Math.max(DT_MIN, Math.min(this.adaptiveDt, nextT - simT));
-            const r = this.sim.step_with_gear(stepDt, 2);
-            const stepOk = r.ok;
-            r.free();
+            // singularity forever.
+            let stepDt = Math.max(DT_MIN, Math.min(this.adaptiveDt, nextT - simT));
+            // Use the packed-u32 variant of step_with_gear in the audio
+            // hot path.  The standard StepResult return crosses the JS↔
+            // WASM boundary 5+ times per call (struct alloc + getters +
+            // .free()) — at 128+ calls per quantum that's enough overhead
+            // to push process() over budget on stiff circuits like the
+            // metronome.  Packed u32 = one wasm crossing per step, no
+            // alloc, no free.  Encoding: bit 0 = ok, bits 1-7 = issue,
+            // bits 8-31 = iters.
+            let r = this.sim.step_with_gear_packed(stepDt, 2);
+            let stepOk = (r & 1) !== 0;
+            let iters  = r >>> 8;
+
             if (!stepOk) {
-                try { this.sim.solve_dc(); } catch (_e) { /* very stuck */ }
+                // Adaptive recovery: if a step fails at current dt, try
+                // a much smaller step (DT_MIN) with BE.
+                this.adaptiveDt = DT_MIN;
+                const r2 = this.sim.step_with_gear_packed(DT_MIN, 1);
+                if ((r2 & 1) !== 0) {
+                    stepOk = true;
+                    stepDt = DT_MIN;
+                    iters  = r2 >>> 8;
+                } else {
+                    // Total failure: solve DC to jump to a valid state.
+                    try { this.sim.solve_dc(); } catch (_e) { /* very stuck */ }
+                }
+            }
+
+            if (!stepOk) {
                 if (this.failuresSinceLog !== undefined) this.failuresSinceLog++;
                 emit(prevV);
                 nextT += period;
                 continue;
             }
 
+            // Adaptive step size: if Newton converged very quickly, we can
+            // likely take larger steps. If it took many iterations, shrink.
+            // Standard SPICE-like logic:
+            if (iters <= 3) {
+                this.adaptiveDt = Math.min(DT_MAX, this.adaptiveDt * 1.2);
+            } else if (iters >= 6) {
+                this.adaptiveDt = Math.max(DT_MIN, this.adaptiveDt * 0.5);
+            }
+
             const newV = this.speakerV();
+
+            // Relay-active edge detection (sample-accurate buzzer source).
+            // export_relay_active() returns one byte per relay; we OR them so
+            // any relay toggling triggers a click.  Cheap when no relay is
+            // present (empty array → folds to 0).
+            if (this.sim) {
+                let active = 0;
+                try {
+                    const flags = this.sim.export_relay_active();
+                    for (let i = 0; i < flags.length; i++) active |= flags[i];
+                } catch (_e) { active = this.relayActivePrev ?? 0; }
+                if (this.relayActivePrev !== null && active !== this.relayActivePrev) {
+                    this._triggerRelayClick(active !== 0);
+                }
+                this.relayActivePrev = active;
+            }
+
             const stepStart = simT;
             simT += stepDt;
 
@@ -730,22 +1348,26 @@ class SimRustProcessor extends AudioWorkletProcessor {
         this.prevV = prevV;
         this.audioPhase = nextT - simT;
 
-        // Per-quantum output amplitude diagnostic (every ~1s)
-        if (this._outDiagCount === undefined) { this._outDiagCount = 0; this._outDiagMax = 0; this._outDiagNonZero = 0; this._outDiagTotal = 0; }
-        let qMax = 0;
-        let qNonZero = 0;
-        for (let i = 0; i < frames; i++) {
-            const abs = Math.abs(ch0[i]);
-            if (abs > qMax) qMax = abs;
-            if (abs > 1e-6) qNonZero++;
-        }
-        if (qMax > this._outDiagMax) this._outDiagMax = qMax;
-        this._outDiagNonZero += qNonZero;
-        this._outDiagTotal += frames;
-        this._outDiagCount++;
-        if (this._outDiagCount >= 375) {
-            console.log(`[worklet] output 1s: maxAmp=${this._outDiagMax.toFixed(4)} nonZero=${this._outDiagNonZero}/${this._outDiagTotal} (${(100*this._outDiagNonZero/this._outDiagTotal).toFixed(1)}%)`);
-            this._outDiagCount = 0; this._outDiagMax = 0; this._outDiagNonZero = 0; this._outDiagTotal = 0;
+        // Per-quantum output amplitude diagnostic (every ~1s) — debug only.
+        // Even the tight scan loop adds measurable cost on every quantum;
+        // gate behind globalThis.__simDebug.
+        if (globalThis.__simDebug) {
+            if (this._outDiagCount === undefined) { this._outDiagCount = 0; this._outDiagMax = 0; this._outDiagNonZero = 0; this._outDiagTotal = 0; }
+            let qMax = 0;
+            let qNonZero = 0;
+            for (let i = 0; i < frames; i++) {
+                const abs = Math.abs(ch0[i]);
+                if (abs > qMax) qMax = abs;
+                if (abs > 1e-6) qNonZero++;
+            }
+            if (qMax > this._outDiagMax) this._outDiagMax = qMax;
+            this._outDiagNonZero += qNonZero;
+            this._outDiagTotal += frames;
+            this._outDiagCount++;
+            if (this._outDiagCount >= 375) {
+                console.log(`[worklet] output 1s: maxAmp=${this._outDiagMax.toFixed(4)} nonZero=${this._outDiagNonZero}/${this._outDiagTotal} (${(100*this._outDiagNonZero/this._outDiagTotal).toFixed(1)}%)`);
+                this._outDiagCount = 0; this._outDiagMax = 0; this._outDiagNonZero = 0; this._outDiagTotal = 0;
+            }
         }
 
         // Snapshot for UI.  Iterate the known node-ID set captured at

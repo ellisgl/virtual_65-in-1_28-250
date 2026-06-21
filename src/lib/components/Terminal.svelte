@@ -8,7 +8,6 @@
 		voltage?: number | null;
 		voltageColor?: string;
 		onDragStart?: (terminalId: number, e: PointerEvent) => void;
-		onConnect?: (terminalId: number, e: PointerEvent) => void;
 		onRemove?: (terminalId: number) => void;
 	}
 
@@ -21,18 +20,12 @@
 		voltage = null,
 		voltageColor,
 		onDragStart,
-		onConnect,
 		onRemove
 	}: Props = $props();
 
 	function handlePointerDown(e: PointerEvent) {
 		e.stopPropagation();
 		onDragStart?.(id, e);
-	}
-
-	function handlePointerUp(e: PointerEvent) {
-		e.stopPropagation();
-		onConnect?.(id, e);
 	}
 
 	function handleContextMenu(e: MouseEvent) {
@@ -50,7 +43,6 @@
 	tabindex="0"
 	aria-label={`Terminal ${id}`}
 	onpointerdown={handlePointerDown}
-	onpointerup={handlePointerUp}
 	oncontextmenu={handleContextMenu}
 >
 	<circle class="terminal-hit" r={radius * 1.8} />

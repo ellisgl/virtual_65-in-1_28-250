@@ -1,4 +1,9 @@
 <script lang="ts">
+	/**
+	 * Lamp glow halo.  Two soft circles over LAMP1 in the board artwork whose
+	 * opacity Board.svelte drives from the lamp's simulated power (0 = off,
+	 * 1 = full brightness).  Coordinates are in board.svg space.
+	 */
 	interface Props {
 		center: { x: number; y: number };
 		opacity: number;

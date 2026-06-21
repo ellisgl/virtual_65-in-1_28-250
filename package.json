@@ -18,13 +18,16 @@
 		"topology:demo": "bun scripts/topology-demo.ts",
 		"runtime:demo": "bun scripts/runtime-demo.ts",
 		"transient:demo": "bun scripts/transient-demo.ts",
-		"wasm:build": "cd rust/rust-e-sim-wasm && wasm-pack build --target web --release --out-name sim_wasm && cp pkg/sim_wasm.js pkg/sim_wasm_bg.wasm ../../static/audio/"
+		"wasm:build": "./build-wasm.sh",
+		"wasm:update": "./build-wasm.sh --update",
+		"wasm:debug": "./build-wasm.sh --debug"
 	},
 	"devDependencies": {
 		"@eslint/compat": "^2.0.4",
 		"@eslint/js": "^10.0.1",
 		"@sveltejs/adapter-auto": "^7.0.1",
 		"@sveltejs/kit": "^2.60.1",
+		"@sveltejs/adapter-static": "^3.0.10",
 		"@sveltejs/vite-plugin-svelte": "^7.0.0",
 		"@types/node": "^24",
 		"eslint": "^10.2.0",
@@ -37,6 +40,6 @@
 		"svelte-check": "^4.4.6",
 		"typescript": "^6.0.2",
 		"typescript-eslint": "^8.58.1",
-		"vite": "^8.0.7"
+		"vite": "^8.0.16"
 	}
 }

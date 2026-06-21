@@ -300,7 +300,7 @@ export class Simulator {
     /**
      * Snapshot of relay active flags (`true` = energised).  Returned as
      * `Vec<u8>` since `Vec<bool>` isn't natively exposable through
-     * wasm-bindgen; 0/1 encoding.
+     * rust-e-sim-wasm-bindgen; 0/1 encoding.
      * @returns {Uint8Array}
      */
     export_relay_active() {
@@ -318,6 +318,18 @@ export class Simulator {
         var v1 = getArrayF64FromWasm0(ret[0], ret[1]).slice();
         wasm.__wbindgen_free(ret[0], ret[1] * 8, 8);
         return v1;
+    }
+    /**
+     * Export the entire simulator state (netlist + current voltages/currents)
+     * as a single JS object.
+     * @returns {any}
+     */
+    get_full_state() {
+        const ret = wasm.simulator_get_full_state(this.__wbg_ptr);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return takeFromExternrefTable0(ret[0]);
     }
     /**
      * @param {Float64Array} v
@@ -445,6 +457,17 @@ export class Simulator {
         return ret;
     }
     /**
+     * Import a previously exported simulator state.  Invalidates the current
+     * compilation, so `compile()` must be called before the next step.
+     * @param {any} val
+     */
+    set_full_state(val) {
+        const ret = wasm.simulator_set_full_state(this.__wbg_ptr, val);
+        if (ret[1]) {
+            throw takeFromExternrefTable0(ret[0]);
+        }
+    }
+    /**
      * Solve for the DC operating point and write the result into the
      * transient state.  Caps are treated as open, inductors as shorts.
      * Must be called after `compile()` and before the first `step()` if
@@ -481,6 +504,74 @@ export class Simulator {
         return StepResult.__wrap(ret);
     }
     /**
+     * Audio-hot-path step variant that returns a packed `u32` instead of
+     * a wasm-bindgen-managed `StepResult` struct.
+     *
+     * Why this exists: every `step_with_gear` call returning `StepResult`
+     * costs ~5 JS↔WASM boundary crossings (the call itself, the wasm
+     * alloc for the struct, the JS wrapper construction, getter calls
+     * for `.ok`/`.iters`/`.issue`, and the final `.free()` to release
+     * the wasm allocation).  At ~1-3 µs per crossing in Chrome, that's
+     * 10-15 µs of pure overhead per step before any actual sim work.
+     *
+     * In the AudioWorklet this is called ~128-256 times per quantum
+     * (2.67 ms of audio).  The overhead alone consumes most of the
+     * quantum budget — causing the worklet to fall behind realtime and
+     * Chrome to drop quanta (the user hears silence even though the
+     * simulator output is correct).
+     *
+     * Encoding of the returned `u32` (little-endian bit layout):
+     * ```text
+     *   bit 0       : ok    (1 = success, 0 = failure)
+     *   bits 1..=7  : issue (0 = ok, 1 = singular, 2 = no-converge, 3 = bad-dt)
+     *   bits 8..=31 : iters (24-bit Newton iteration count, plenty)
+     * ```
+     *
+     * JS unpacking:
+     * ```js
+     * const r = sim.step_with_gear_packed(dt, 2);
+     * const ok    = (r & 1) !== 0;
+     * const issue = (r >> 1) & 0x7f;
+     * const iters = r >>> 8;
+     * ```
+     *
+     * One wasm call, one number, no alloc, no `.free()`.  Functionally
+     * identical to `step_with_gear` — uses the exact same Rust step
+     * kernel underneath; only the return-value plumbing differs.
+     * @param {number} dt
+     * @param {number} gear
+     * @returns {number}
+     */
+    step_with_gear_packed(dt, gear) {
+        const ret = wasm.simulator_step_with_gear_packed(this.__wbg_ptr, dt, gear);
+        return ret >>> 0;
+    }
+    /**
+     * Update the resistance of an existing resistor.  This is a low-latency
+     * operation that avoids full netlist reconstruction.
+     * @param {string} id
+     * @param {number} resistance_ohms
+     * @returns {boolean}
+     */
+    update_resistor(id, resistance_ohms) {
+        const ptr0 = passStringToWasm0(id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.simulator_update_resistor(this.__wbg_ptr, ptr0, len0, resistance_ohms);
+        return ret !== 0;
+    }
+    /**
+     * Update the voltage of an existing voltage source.
+     * @param {string} id
+     * @param {number} voltage
+     * @returns {boolean}
+     */
+    update_voltage_source(id, voltage) {
+        const ptr0 = passStringToWasm0(id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.simulator_update_voltage_source(this.__wbg_ptr, ptr0, len0, voltage);
+        return ret !== 0;
+    }
+    /**
      * Voltage-source branch current by component id.  Returns 0.0 if the
      * component is unknown or the simulator hasn't been compiled/stepped.
      *
@@ -508,7 +599,7 @@ if (Symbol.dispose) Simulator.prototype[Symbol.dispose] = Simulator.prototype.fr
  *
  * JS receives a number-typed handle that it threads back into
  * `numeric_factor` and `sparse_solve_in_place`.  The pattern data itself
- * lives in wasm linear memory and is never serialized across the boundary.
+ * lives in rust-e-sim-wasm linear memory and is never serialized across the boundary.
  */
 export class SparseLuPattern {
     static __wrap(ptr) {
@@ -539,7 +630,7 @@ export class SparseLuPattern {
 if (Symbol.dispose) SparseLuPattern.prototype[Symbol.dispose] = SparseLuPattern.prototype.free;
 
 /**
- * Outcome of a `step()` call, marshalled across the wasm boundary as a
+ * Outcome of a `step()` call, marshalled across the rust-e-sim-wasm boundary as a
  * small enum.  JS gets back either an iteration count (success) or a
  * negative error code.
  */
@@ -578,6 +669,14 @@ export class StepResult {
         return ret >>> 0;
     }
     /**
+     * Estimated Local Truncation Error (LTE).
+     * @returns {number}
+     */
+    get lte() {
+        const ret = wasm.__wbg_get_stepresult_lte(this.__wbg_ptr);
+        return ret;
+    }
+    /**
      * @returns {boolean}
      */
     get ok() {
@@ -598,6 +697,13 @@ export class StepResult {
      */
     set iters(arg0) {
         wasm.__wbg_set_stepresult_iters(this.__wbg_ptr, arg0);
+    }
+    /**
+     * Estimated Local Truncation Error (LTE).
+     * @param {number} arg0
+     */
+    set lte(arg0) {
+        wasm.__wbg_set_stepresult_lte(this.__wbg_ptr, arg0);
     }
     /**
      * @param {boolean} arg0
@@ -624,7 +730,7 @@ export class Transistor {
      * `undefined` on the JS side; defaults are applied inside the stamp
      * function to match the TS reference exactly.
      *
-     * `polarity_npn` is a boolean instead of a string because wasm-bindgen
+     * `polarity_npn` is a boolean instead of a string because rust-e-sim-wasm-bindgen
      * doesn't transparently marshal string enums.  JS adapter translates
      * `polarity === 'npn'` → `true`, `'pnp'` → `false`.
      * @param {boolean} polarity_npn
@@ -838,17 +944,6 @@ export function numericFactor(mat, n, pat) {
 }
 
 /**
- * Smoke-test export — verifies the JS-WASM round-trip works.
- * Returns the input + 1.0.  Will be removed once the real API is in use.
- * @param {number} x
- * @returns {number}
- */
-export function ping(x) {
-    const ret = wasm.ping(x);
-    return ret;
-}
-
-/**
  * Solve `(L * U) * x = rhs` using a matrix already factored by
  * `numeric_factor`.  The solution overwrites `rhs` on return.
  * @param {Float64Array} mat
@@ -867,11 +962,181 @@ export function sparseSolveInPlace(mat, rhs, n, pat) {
 function __wbg_get_imports() {
     const import0 = {
         __proto__: null,
+        __wbg_Error_bce6d499ff0a4aff: function(arg0, arg1) {
+            const ret = Error(getStringFromWasm0(arg0, arg1));
+            return ret;
+        },
+        __wbg_Number_b7972a139bfbfdf0: function(arg0) {
+            const ret = Number(arg0);
+            return ret;
+        },
+        __wbg___wbindgen_boolean_get_2304fb8c853028c8: function(arg0) {
+            const v = arg0;
+            const ret = typeof(v) === 'boolean' ? v : undefined;
+            return isLikeNone(ret) ? 0xFFFFFF : ret ? 1 : 0;
+        },
         __wbg___wbindgen_copy_to_typed_array_787746aeb47818bc: function(arg0, arg1, arg2) {
             new Uint8Array(arg2.buffer, arg2.byteOffset, arg2.byteLength).set(getArrayU8FromWasm0(arg0, arg1));
         },
+        __wbg___wbindgen_debug_string_edece8177ad01481: function(arg0, arg1) {
+            const ret = debugString(arg1);
+            const ptr1 = passStringToWasm0(ret, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len1 = WASM_VECTOR_LEN;
+            getDataViewMemory0().setInt32(arg0 + 4 * 1, len1, true);
+            getDataViewMemory0().setInt32(arg0 + 4 * 0, ptr1, true);
+        },
+        __wbg___wbindgen_in_07056af4f902c445: function(arg0, arg1) {
+            const ret = arg0 in arg1;
+            return ret;
+        },
+        __wbg___wbindgen_is_function_5cd60d5cf78b4eef: function(arg0) {
+            const ret = typeof(arg0) === 'function';
+            return ret;
+        },
+        __wbg___wbindgen_is_object_b4593df85baada48: function(arg0) {
+            const val = arg0;
+            const ret = typeof(val) === 'object' && val !== null;
+            return ret;
+        },
+        __wbg___wbindgen_is_string_dde0fd9020db4434: function(arg0) {
+            const ret = typeof(arg0) === 'string';
+            return ret;
+        },
+        __wbg___wbindgen_is_undefined_35bb9f4c7fd651d5: function(arg0) {
+            const ret = arg0 === undefined;
+            return ret;
+        },
+        __wbg___wbindgen_jsval_loose_eq_0ad77b7717db155c: function(arg0, arg1) {
+            const ret = arg0 == arg1;
+            return ret;
+        },
+        __wbg___wbindgen_number_get_f73a1244370fcc2c: function(arg0, arg1) {
+            const obj = arg1;
+            const ret = typeof(obj) === 'number' ? obj : undefined;
+            getDataViewMemory0().setFloat64(arg0 + 8 * 1, isLikeNone(ret) ? 0 : ret, true);
+            getDataViewMemory0().setInt32(arg0 + 4 * 0, !isLikeNone(ret), true);
+        },
+        __wbg___wbindgen_string_get_d109740c0d18f4d7: function(arg0, arg1) {
+            const obj = arg1;
+            const ret = typeof(obj) === 'string' ? obj : undefined;
+            var ptr1 = isLikeNone(ret) ? 0 : passStringToWasm0(ret, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            var len1 = WASM_VECTOR_LEN;
+            getDataViewMemory0().setInt32(arg0 + 4 * 1, len1, true);
+            getDataViewMemory0().setInt32(arg0 + 4 * 0, ptr1, true);
+        },
         __wbg___wbindgen_throw_9c31b086c2b26051: function(arg0, arg1) {
             throw new Error(getStringFromWasm0(arg0, arg1));
+        },
+        __wbg_call_13665d9f14390edc: function() { return handleError(function (arg0, arg1) {
+            const ret = arg0.call(arg1);
+            return ret;
+        }, arguments); },
+        __wbg_done_54b8da57023b7ed2: function(arg0) {
+            const ret = arg0.done;
+            return ret;
+        },
+        __wbg_entries_564a7e8b1e54ede5: function(arg0) {
+            const ret = Object.entries(arg0);
+            return ret;
+        },
+        __wbg_get_3e9a707ab7d352eb: function() { return handleError(function (arg0, arg1) {
+            const ret = Reflect.get(arg0, arg1);
+            return ret;
+        }, arguments); },
+        __wbg_get_98fdf51d029a75eb: function(arg0, arg1) {
+            const ret = arg0[arg1 >>> 0];
+            return ret;
+        },
+        __wbg_get_unchecked_1dfe6d05ad91d9b7: function(arg0, arg1) {
+            const ret = arg0[arg1 >>> 0];
+            return ret;
+        },
+        __wbg_get_with_ref_key_6412cf3094599694: function(arg0, arg1) {
+            const ret = arg0[arg1];
+            return ret;
+        },
+        __wbg_instanceof_ArrayBuffer_53db37b06f6b9afe: function(arg0) {
+            let result;
+            try {
+                result = arg0 instanceof ArrayBuffer;
+            } catch (_) {
+                result = false;
+            }
+            const ret = result;
+            return ret;
+        },
+        __wbg_instanceof_Uint8Array_abd07d4bd221d50b: function(arg0) {
+            let result;
+            try {
+                result = arg0 instanceof Uint8Array;
+            } catch (_) {
+                result = false;
+            }
+            const ret = result;
+            return ret;
+        },
+        __wbg_isArray_94898ed3aad6947b: function(arg0) {
+            const ret = Array.isArray(arg0);
+            return ret;
+        },
+        __wbg_isSafeInteger_01e964d144ad3a55: function(arg0) {
+            const ret = Number.isSafeInteger(arg0);
+            return ret;
+        },
+        __wbg_iterator_1441b47f341dc34f: function() {
+            const ret = Symbol.iterator;
+            return ret;
+        },
+        __wbg_length_2591a0f4f659a55c: function(arg0) {
+            const ret = arg0.length;
+            return ret;
+        },
+        __wbg_length_56fcd3e2b7e0299d: function(arg0) {
+            const ret = arg0.length;
+            return ret;
+        },
+        __wbg_new_02d162bc6cf02f60: function() {
+            const ret = new Object();
+            return ret;
+        },
+        __wbg_new_310879b66b6e95e1: function() {
+            const ret = new Array();
+            return ret;
+        },
+        __wbg_new_7ddec6de44ff8f5d: function(arg0) {
+            const ret = new Uint8Array(arg0);
+            return ret;
+        },
+        __wbg_next_2a4e19f4f5083b0f: function(arg0) {
+            const ret = arg0.next;
+            return ret;
+        },
+        __wbg_next_6429a146bf756f93: function() { return handleError(function (arg0) {
+            const ret = arg0.next();
+            return ret;
+        }, arguments); },
+        __wbg_prototypesetcall_5f9bdc8d75e07276: function(arg0, arg1, arg2) {
+            Uint8Array.prototype.set.call(getArrayU8FromWasm0(arg0, arg1), arg2);
+        },
+        __wbg_set_6be42768c690e380: function(arg0, arg1, arg2) {
+            arg0[arg1] = arg2;
+        },
+        __wbg_set_78ea6a19f4818587: function(arg0, arg1, arg2) {
+            arg0[arg1 >>> 0] = arg2;
+        },
+        __wbg_value_9cc0518af87a489c: function(arg0) {
+            const ret = arg0.value;
+            return ret;
+        },
+        __wbindgen_cast_0000000000000001: function(arg0) {
+            // Cast intrinsic for `F64 -> Externref`.
+            const ret = arg0;
+            return ret;
+        },
+        __wbindgen_cast_0000000000000002: function(arg0, arg1) {
+            // Cast intrinsic for `Ref(String) -> Externref`.
+            const ret = getStringFromWasm0(arg0, arg1);
+            return ret;
         },
         __wbindgen_init_externref_table: function() {
             const table = wasm.__wbindgen_externrefs;
@@ -911,10 +1176,81 @@ const TransistorStampFinalization = (typeof FinalizationRegistry === 'undefined'
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_transistorstamp_free(ptr, 1));
 
+function addToExternrefTable0(obj) {
+    const idx = wasm.__externref_table_alloc();
+    wasm.__wbindgen_externrefs.set(idx, obj);
+    return idx;
+}
+
 function _assertClass(instance, klass) {
     if (!(instance instanceof klass)) {
         throw new Error(`expected instance of ${klass.name}`);
     }
+}
+
+function debugString(val) {
+    // primitive types
+    const type = typeof val;
+    if (type == 'number' || type == 'boolean' || val == null) {
+        return  `${val}`;
+    }
+    if (type == 'string') {
+        return `"${val}"`;
+    }
+    if (type == 'symbol') {
+        const description = val.description;
+        if (description == null) {
+            return 'Symbol';
+        } else {
+            return `Symbol(${description})`;
+        }
+    }
+    if (type == 'function') {
+        const name = val.name;
+        if (typeof name == 'string' && name.length > 0) {
+            return `Function(${name})`;
+        } else {
+            return 'Function';
+        }
+    }
+    // objects
+    if (Array.isArray(val)) {
+        const length = val.length;
+        let debug = '[';
+        if (length > 0) {
+            debug += debugString(val[0]);
+        }
+        for(let i = 1; i < length; i++) {
+            debug += ', ' + debugString(val[i]);
+        }
+        debug += ']';
+        return debug;
+    }
+    // Test for built-in
+    const builtInMatches = /\[object ([^\]]+)\]/.exec(toString.call(val));
+    let className;
+    if (builtInMatches && builtInMatches.length > 1) {
+        className = builtInMatches[1];
+    } else {
+        // Failed to match the standard '[object ClassName]'
+        return toString.call(val);
+    }
+    if (className == 'Object') {
+        // we're a user defined class or Object
+        // JSON.stringify avoids problems with cycles, and is generally much
+        // easier than looping through ownProperties of `val`.
+        try {
+            return 'Object(' + JSON.stringify(val) + ')';
+        } catch (_) {
+            return 'Object';
+        }
+    }
+    // errors
+    if (val instanceof Error) {
+        return `${val.name}: ${val.message}\n${val.stack}`;
+    }
+    // TODO we could test for more things here, like `Set`s and `Map`s.
+    return className;
 }
 
 function getArrayF64FromWasm0(ptr, len) {
@@ -930,6 +1266,14 @@ function getArrayI32FromWasm0(ptr, len) {
 function getArrayU8FromWasm0(ptr, len) {
     ptr = ptr >>> 0;
     return getUint8ArrayMemory0().subarray(ptr / 1, ptr / 1 + len);
+}
+
+let cachedDataViewMemory0 = null;
+function getDataViewMemory0() {
+    if (cachedDataViewMemory0 === null || cachedDataViewMemory0.buffer.detached === true || (cachedDataViewMemory0.buffer.detached === undefined && cachedDataViewMemory0.buffer !== wasm.memory.buffer)) {
+        cachedDataViewMemory0 = new DataView(wasm.memory.buffer);
+    }
+    return cachedDataViewMemory0;
 }
 
 let cachedFloat64ArrayMemory0 = null;
@@ -966,6 +1310,15 @@ function getUint8ArrayMemory0() {
         cachedUint8ArrayMemory0 = new Uint8Array(wasm.memory.buffer);
     }
     return cachedUint8ArrayMemory0;
+}
+
+function handleError(f, args) {
+    try {
+        return f.apply(this, args);
+    } catch (e) {
+        const idx = addToExternrefTable0(e);
+        wasm.__wbindgen_exn_store(idx);
+    }
 }
 
 function isLikeNone(x) {
@@ -1030,6 +1383,12 @@ function passStringToWasm0(arg, malloc, realloc) {
     return ptr;
 }
 
+function takeFromExternrefTable0(idx) {
+    const value = wasm.__wbindgen_externrefs.get(idx);
+    wasm.__externref_table_dealloc(idx);
+    return value;
+}
+
 let cachedTextDecoder = new TextDecoder('utf-8', { ignoreBOM: true, fatal: true });
 cachedTextDecoder.decode();
 const MAX_SAFARI_DECODE_BYTES = 2146435072;
@@ -1064,6 +1423,7 @@ function __wbg_finalize_init(instance, module) {
     wasmInstance = instance;
     wasm = instance.exports;
     wasmModule = module;
+    cachedDataViewMemory0 = null;
     cachedFloat64ArrayMemory0 = null;
     cachedInt32ArrayMemory0 = null;
     cachedUint32ArrayMemory0 = null;

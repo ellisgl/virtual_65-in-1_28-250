@@ -4,74 +4,78 @@ const model2SB56: DeviceModel = {
 	name: '2SB56',
 	type: 'bjt',
 	params: {
-		// Germanium PNP — 2SB56 datasheet / SPICE model references:
-		// Is≈10µA (Ge has high leakage), bf≈100, nf=1, vaf≈40V, var≈50V
 		polarity: 'pnp',
-		bf: 100,
-		is: 10e-6,
-		br: 5,
+		// Calibrated to a real device on a TC1 component tester:
+		//   hfe = 77.9 @ Ic=1mA      -> bf  = 78
+		//   Vbe = 81mV  @ Ic=1mA     -> is  = Ic/exp(Vbe/Vt) ~ 44uA (germanium: low Vbe, high is)
+		//   Ices = 8uA               -> matches is/br = 44u/5 = 8.8uA (BC leakage), so br=5 holds
+		//   Iceo = 0.19mA            -> (bf+1)*Icbo, consistent with the above
+		bf:  78,
+		is:  44e-6,
+		br:  5,
 		vaf: 40,
 		var: 50,
 		ikf: 0.1,
 		ikr: 0.05,
-		nf: 1,
-		nr: 1,
+		nf:  1,
+		nr:  1,
 		ise: 5e-6,
-		ne: 2,
+		ne:  2,
 		isc: 2e-6,
-		nc: 2,
+		nc:  2,
 		cje: 150e-12,
 		vje: 0.6,
 		mje: 0.5,
 		cjc: 45e-12,
 		vjc: 0.6,
 		mjc: 0.33,
-		tf: 1.5e-6,
-		tr: 20e-6
+		tf:  1.5e-6,
+		tr:  20e-6,
 	}
 };
 
-// I think the JS711-11 is a 2SC711 in a different package.
-// Which the modern equivalent is the 2N3707
-// I found enough specs to create a spice model
+// The JS711-11 is believed to be a 2SC711 in a different package (modern
+// equivalent: 2N3707); the model parameters below were built from those specs.
 const modelJS711: DeviceModel = {
 	name: 'S711',
 	type: 'bjt',
 	params: {
 		polarity: 'npn',
-		bf:300,
-		is:1.0e-13,
-		br:2,
-		vaf:60,
-		var:50,
-		ikf:5.0e-2,
-		ikr:0,
-		nf:1,
-		nr:1,
-		ise:1.2e-14,
-		ne:1.5,
-		isc:1.0e-12,
-		nc:2,
-		cje:2.0e-11,
-		vje:.75,
-		mje:.33,
-		cjc:5.0e-12,
-		vjc:.75,
-		mjc:.33,
-		tr:2.5e-7,
-		tf:2.1e-9,
-		xti:3,
-		eg:1.11,
-		xtb:1.5,
-		rc:5,
-		rb:200,
-		fc:.5,
-		itf:4.0e-2,
-		vtf:10,
-		xtf:2
+		// NOTE: deliberately NOT the TC1-measured values.  A real JS711 read
+		// hfe=34 @ 0.28mA with Vbe=650mV (is ≈ 3.3e-15), but installing those
+		// params breaks the P45 oscillator (which shares this Q3): the higher
+		// turn-on threshold causes dropouts, and matching the measured
+		// low-current gain starves P45 at its higher operating current.  The
+		// real P45 runs the real device fine, so the gap is in our P45 model
+		// (LT700 transformer + bias), not in these parameters.  Don't
+		// re-calibrate from measurements until that transformer is modeled.
+		bf:  300,
+		is:  1.0e-13,
+		br:  2,
+		vaf: 60,
+		var: 50,
+		ikf: 5.0e-2,
+		ikr: 0,
+		nf:  1,
+		nr:  1,
+		ise: 1.2e-14,
+		ne:  1.5,
+		isc: 1.0e-12,
+		nc:  2,
+		cje: 2.0e-11,
+		vje: 0.75,
+		mje: 0.33,
+		cjc: 5.0e-12,
+		vjc: 0.75,
+		mjc: 0.33,
+		tf:  2.1e-9,
+		tr:  2.5e-7,
 	}
 };
 
+// Reference: the SPICE subcircuit these SCR params were derived from
+// (an SCR is modeled as a cross-coupled PNP/NPN pair):
+//
 // * C103Y SCR Subcircuit (30V, 0.8A)
 // * Terminals: Anode Gate Cathode
 // .SUBCKT C103Y 1 2 3
@@ -226,7 +230,11 @@ const activeDevices: KitComponent[] = [
 ];
 
 /*
-* LT700 Audio Output Transformer
+ * Reference: the SPICE subcircuit T1's transformer parameters were derived
+ * from.  Not yet simulated as coupled inductors — see the T1 entry below for
+ * how the app currently approximates it.
+ *
+ * LT700 Audio Output Transformer
 * Terminals: 1=Primary Start, 2=Center Tap, 3=Primary End
 *            4=Secondary Start, 5=Secondary End
 .SUBCKT LT700 1 2 3 4 5
@@ -279,7 +287,33 @@ const electroMechanical: KitComponent[] = [
 			params: { tempC: 300, nominalVoltage: 3.5, nominalCurrent: 0.2, nominalPower: 0.7 }
 		}
 	},
-	{ id: 'SPK1', kind: 'speaker', name: '8 ohm speaker', terminals: [90, 91], value: 8, unit: 'ohm' }
+	{ id: 'SPK1', kind: 'speaker', name: '8 ohm speaker', terminals: [90, 91], value: 8, unit: 'ohm' },
+	{
+		// Crystal/piezoelectric earphone across terminals 84/85.  Rated
+		// "600 Ω", but a piezo element is electrically a small capacitor, not
+		// a resistor — its impedance is ~600 Ω only near a specific test
+		// frequency (1/2πfC).  We model it as that capacitance in parallel
+		// with a high leakage/bleed resistance, and treat the voltage across
+		// it as the audio output (see netlist.ts + the worklet probe).
+		id: 'EAR1',
+		kind: 'earphone',
+		name: 'crystal earphone',
+		terminals: [84, 85],
+		value: 600,
+		unit: 'ohm',
+		model: {
+			name: 'piezo-earphone',
+			type: 'earphone',
+			params: {
+				// C chosen so |Z| ≈ 600 Ω at ~1 kHz (the usual rating point):
+				//   C = 1/(2π·1000·600) ≈ 265 nF.
+				capacitanceFarads: 2.65e-7,
+				// High parallel resistance: DC bleed path + dielectric loss, so
+				// the node isn't left floating (keeps the solver well-posed).
+				leakageResistanceOhms: 1_000_000
+			}
+		}
+	}
 ];
 
 const magneticParts: KitComponent[] = [
@@ -302,16 +336,17 @@ const magneticParts: KitComponent[] = [
 			primaryEnd: 72,
 			secondaryStart: 73,
 			secondaryEnd: 74,
-			// .SUBCKT LT700 winding values.
-			lp1H: 0.4,
-			lp2H: 0.4,
-			lsH: 0.004,
+			// Winding values.  NOTE: these are 1/10 of the datasheet-derived
+			// SPICE reference above (0.4 H + 0.4 H primary, 0.004 H secondary).
+			// The reduction predates this comment and its reason isn't
+			// recorded — revisit when T1 gets a proper coupled-inductor model.
+			lp1H: 0.04,
+			lp2H: 0.04,
+			lsH: 0.0004,
 			rp1Ohm: 45,
 			rp2Ohm: 45,
 			rsOhm: 0.4,
-			// Datasheet coupling coefficient — kept here for reference only.
-			// The simulator uses an empirically-tuned k (see netlist.ts).
-			couplingDatasheet: 0.995,
+			coupling: 0.995,
 			// Compatibility aliases for existing transformer consumers.
 			ratioParameter: 0.05,
 			turnsRatioApprox: 20
@@ -357,9 +392,31 @@ const controlsAndSources: KitComponent[] = [
 	{
 		id: 'KEY1',
 		kind: 'switch',
-		name: 'morse code key',
+		name: 'Morse code key',
 		terminals: [82, 83],
 		metadata: { normallyOpen: true, terminal1: 82, terminal2: 83 }
+	},
+	{
+		// CdS photoresistor.  Resistance varies between `value` (dark) and
+		// `metadata.lightResistance` (bright) according to the user-set
+		// light-level position (0 = dark, 1 = bright).  Mapped via
+		// log-linear interpolation, which matches real CdS cells'
+		// decade-per-log-lux response.
+		// Range is intentionally wide — 100 Ω in full daylight to
+		// 5 MΩ in dark — to cover the kit's intended use
+		// in light-controlled trigger circuits.
+		id: 'LDR1',
+		kind: 'cds',
+		name: 'CdS photoresistor',
+		terminals: [66, 67],
+		value: 5_000_000,            // dark resistance (ohms)
+		unit: 'ohm',
+		metadata: {
+			lightResistance: 100,      // ohms in full daylight
+			defaultPosition: 0.5,      // half-light at startup
+			terminal1: 66,
+			terminal2: 67
+		}
 	},
 	{
 		id: 'VM1',
@@ -367,6 +424,15 @@ const controlsAndSources: KitComponent[] = [
 		name: 'voltmeter',
 		terminals: [80, 81],
 		metadata: { positive: 81, negative: 80 }
+	},
+	{
+		id: 'SOLAR1',
+		kind: 'solar-cell',
+		name: 'solar battery',
+		terminals: [64, 65],
+		value: 0.5,
+		unit: 'V',
+		metadata: { positive: 64, negative: 65, defaultPosition: 0.5 }
 	}
 ];
 
@@ -383,4 +449,6 @@ export const KIT_TERMINAL_IDS = Array.from(
 	new Set(KIT_COMPONENTS.flatMap((component) => component.terminals))
 ).sort((a, b) => a - b);
 
-export const UNMAPPED_TERMINAL_GAPS = [64, 65, 66, 67, 84, 85];
+// Terminals that exist on the board silkscreen but no component claims.
+// (84/85 are now the EAR1 earphone; none remain unmapped.)
+export const UNMAPPED_TERMINAL_GAPS: number[] = [];

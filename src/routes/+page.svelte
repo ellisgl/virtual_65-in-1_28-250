@@ -3,19 +3,18 @@
 </script>
 
 <main>
-	<h1>Virtual Science Fair 65-in-1</h1>
 	<Board />
 </main>
 
 <style>
 	main {
-		padding: 1rem;
+		padding: 0 1rem 1rem;
 		display: grid;
 		gap: 1rem;
-	}
-
-	h1 {
-		margin: 0;
-		font-size: clamp(1.2rem, 2.5vw, 1.8rem);
+		/* Without these, the SVG's intrinsic mm-width (~1651 px at 96 dpi)
+		   causes the grid to overflow the viewport instead of scaling. */
+		box-sizing: border-box;
+		max-width: 100%;
+		overflow-x: hidden;
 	}
 </style>

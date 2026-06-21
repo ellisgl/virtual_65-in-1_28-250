@@ -17,24 +17,22 @@ import type { DragState, Wire } from '$lib/types';
 const SVG_UNITS_PER_CM = 11;
 
 const WIRE_BINS = [
-	{ maxCm: 7.5,      color: '#ffffff' }, // white  — 7.5 cm
-	{ maxCm: 15,       color: '#e53935' }, // red    — 15 cm
-	{ maxCm: 25,       color: '#1e88e5' }, // blue   — 25 cm
-	{ maxCm: 35,       color: '#fdd835' }, // yellow — 35 cm
-	{ maxCm: 38,       color: '#2d2d2d' }, // black  — 38 cm
-	{ maxCm: Infinity, color: '#43a047' }, // green  — 3 m
+	{ maxCm: 15,  color: '#e53935' }, // red    — 15 cm
+	{ maxCm: 25,  color: '#1e88e5' }, // blue   — 25 cm
+	{ maxCm: 38,  color: '#fdd835' }, // yellow — 38 cm
+	{ maxCm: 300, color: '#43a047' }, // green  — 3 m
 ] as const;
 
-function wireColor(fromTerminal: number, toTerminal: number): string {
+function wireInfo(fromTerminal: number, toTerminal: number): { color: string; lengthCm: number } {
 	const from = TERMINAL_POSITIONS[fromTerminal];
 	const to   = TERMINAL_POSITIONS[toTerminal];
 	// Unmapped terminals (position −1, −1) default to the shortest wire.
-	if (!from || !to || from.x < 0 || to.x < 0) return WIRE_BINS[0].color;
+	if (!from || !to || from.x < 0 || to.x < 0) return { color: WIRE_BINS[0].color, lengthCm: WIRE_BINS[0].maxCm };
 	const cm = Math.hypot(to.x - from.x, to.y - from.y) / SVG_UNITS_PER_CM;
 	for (const bin of WIRE_BINS) {
-		if (cm <= bin.maxCm) return bin.color;
+		if (cm <= bin.maxCm) return { color: bin.color, lengthCm: bin.maxCm };
 	}
-	return WIRE_BINS[WIRE_BINS.length - 1].color;
+	return { color: WIRE_BINS[WIRE_BINS.length - 1].color, lengthCm: WIRE_BINS[WIRE_BINS.length - 1].maxCm };
 }
 
 // ── Store ────────────────────────────────────────────────────────────────────
@@ -45,7 +43,8 @@ function makeStore() {
 		active: false,
 		fromTerminal: null,
 		currentX: 0,
-		currentY: 0
+		currentY: 0,
+		shapingPoints: []
 	});
 	let _topology = $derived(buildCircuitTopology(wires, KIT_COMPONENTS));
 
@@ -60,10 +59,20 @@ function makeStore() {
 			return _topology;
 		},
 		startDrag(fromTerminal: number, x: number, y: number) {
+			if (drag.active && drag.fromTerminal !== null) {
+				// If clicking a terminal while one is already selected, try to complete
+				this.complete(fromTerminal);
+				return;
+			}
 			drag.active = true;
 			drag.fromTerminal = fromTerminal;
 			drag.currentX = x;
 			drag.currentY = y;
+			drag.shapingPoints = [];
+		},
+		addShapingPoint(x: number, y: number) {
+			if (!drag.active) return;
+			drag.shapingPoints.push({ x, y });
 		},
 		updateDrag(x: number, y: number) {
 			drag.currentX = x;
@@ -82,11 +91,14 @@ function makeStore() {
 					(w.fromTerminal === toTerminal && w.toTerminal === from)
 			);
 			if (!exists) {
+				const info = wireInfo(from, toTerminal);
 				wires.push({
 					id: crypto.randomUUID(),
 					fromTerminal: from,
 					toTerminal,
-					color: wireColor(from, toTerminal)
+					color: info.color,
+					lengthCm: info.lengthCm,
+					shapingPoints: [...drag.shapingPoints]
 				});
 			}
 			this.cancel();
@@ -94,6 +106,7 @@ function makeStore() {
 		cancel() {
 			drag.active = false;
 			drag.fromTerminal = null;
+			drag.shapingPoints = [];
 		},
 		removeWire(id: string) {
 			const idx = wires.findIndex((w) => w.id === id);
@@ -109,20 +122,29 @@ function makeStore() {
 		clearAll() {
 			wires.length = 0;
 		},
-		loadWires(newWires: Array<{ fromTerminal: number; toTerminal: number }>) {
+		loadWires(
+			newWires: Array<{
+				fromTerminal: number;
+				toTerminal: number;
+				shapingPoints?: Array<{ x: number; y: number }>;
+			}>
+		) {
 			wires.length = 0;
-			for (const { fromTerminal, toTerminal } of newWires) {
+			for (const { fromTerminal, toTerminal, shapingPoints } of newWires) {
 				const exists = wires.some(
 					(w) =>
 						(w.fromTerminal === fromTerminal && w.toTerminal === toTerminal) ||
 						(w.fromTerminal === toTerminal && w.toTerminal === fromTerminal)
 				);
 				if (!exists) {
+					const info = wireInfo(fromTerminal, toTerminal);
 					wires.push({
 						id: crypto.randomUUID(),
 						fromTerminal,
 						toTerminal,
-						color: wireColor(fromTerminal, toTerminal)
+						color: info.color,
+						lengthCm: info.lengthCm,
+						shapingPoints: shapingPoints ? [...shapingPoints] : []
 					});
 				}
 			}

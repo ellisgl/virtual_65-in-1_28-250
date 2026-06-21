@@ -3,10 +3,10 @@ import { buildCircuitTopology } from '../src/lib';
 import type { Wire } from '../src/lib';
 
 const demoWires: Wire[] = [
-	{ id: 'w1', fromTerminal: 86, toTerminal: 1, color: '#e53935' },
-	{ id: 'w2', fromTerminal: 2, toTerminal: 68, color: '#1e88e5' },
-	{ id: 'w3', fromTerminal: 69, toTerminal: 87, color: '#43a047' },
-	{ id: 'w4', fromTerminal: 3, toTerminal: 11, color: '#fdd835' }
+	{ id: 'w1', fromTerminal: 86, toTerminal: 1, color: '#e53935', lengthCm: 15 },
+	{ id: 'w2', fromTerminal: 2, toTerminal: 68, color: '#1e88e5', lengthCm: 25 },
+	{ id: 'w3', fromTerminal: 69, toTerminal: 87, color: '#43a047', lengthCm: 300 },
+	{ id: 'w4', fromTerminal: 3, toTerminal: 11, color: '#fdd835', lengthCm: 38 }
 ];
 
 const topology = buildCircuitTopology(demoWires, KIT_COMPONENTS);

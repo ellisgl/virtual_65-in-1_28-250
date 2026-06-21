@@ -101,8 +101,8 @@ TERMINAL_POSITIONS[64]  = { x: 220, y: 57  };
 TERMINAL_POSITIONS[65]  = { x: 256, y: 57  };
 
 // CdS Cell
-TERMINAL_POSITIONS[66]  = { x: 289, y: 57  };
-TERMINAL_POSITIONS[67]  = { x: 310, y: 57  };
+TERMINAL_POSITIONS[66]  = { x: 279, y: 57  };
+TERMINAL_POSITIONS[67]  = { x: 313, y: 57  };
 
 // Signal Lamp
 TERMINAL_POSITIONS[68]  = { x: 334, y: 57  };

@@ -10,14 +10,17 @@ export type ComponentKind =
 	| 'zener-diode'
 	| 'battery'
 	| 'speaker'
+	| 'earphone'
 	| 'transformer'
 	| 'lamp'
 	| 'relay'
 	| 'antenna'
 	| 'switch'
+	| 'cds'
+	| 'solar-cell'
 	| 'voltmeter';
 
-export type DeviceModelType = 'diode' | 'bjt' | 'scr' | 'relay' | 'lamp';
+export type DeviceModelType = 'diode' | 'bjt' | 'scr' | 'relay' | 'lamp' | 'earphone';
 
 export interface DeviceModel {
 	name: string;
@@ -46,6 +49,10 @@ export interface Wire {
 	fromTerminal: number;
 	toTerminal: number;
 	color: string;
+	lengthCm: number;
+	/** Optional points for shaping the wire.
+	 *  If provided, the wire will be drawn as a poly-bezier passing through or influenced by these points. */
+	shapingPoints?: Array<{ x: number; y: number }>;
 }
 
 export interface DragState {
@@ -53,6 +60,7 @@ export interface DragState {
 	fromTerminal: number | null;
 	currentX: number;
 	currentY: number;
+	shapingPoints: Array<{ x: number; y: number }>;
 }
 
 export interface CircuitNode {
@@ -238,6 +246,21 @@ export interface SimulationNetlist {
 	unsupported: UnsupportedElement[];
 	groundNodeId: number | null;
 	connectedNodeIds: number[];
+	/**
+	 * Present (and enabled) when the wiring forms a radio receiver
+	 * (antenna + tuned tank + detector diode).  The simulator can't represent
+	 * MHz RF, so when this is set the audio worklet switches to a synthesized
+	 * AM-receiver instead of solving the circuit.  `tuningHz` is the tank's
+	 * resonant frequency for the current variable-cap setting; the worklet
+	 * weights its station bank against it.  Recomputed whenever the tuning
+	 * knob moves (so it changes on every updateControls).
+	 */
+	radio?: {
+		enabled: boolean;
+		tuningHz: number;
+		bandLoHz: number;
+		bandHiHz: number;
+	};
 }
 
 export interface SimulationBuildOptions {
@@ -302,7 +325,7 @@ export interface CompiledNetlist {
 	transformerElements: SimulationTransformerElement[];
 	inductorElements: SimulationInductorElement[];
 	transistorElements: SimulationTransistorElement[];
-	/** Diode elements (Shockley model + optional Zener breakdown). Stamped per Newton iteration. */
+	/** Diode elements (Shockley model and optional Zener breakdown). Stamped per Newton iteration. */
 	diodeElements: SimulationDiodeElement[];
 	/**
 	 * Symbolic LU pattern covering every position that any stamp (static or dynamic)
@@ -401,7 +424,7 @@ export interface TransientState {
 	 */
 	prevDt:       number;
 	/**
-	 * Exponentially-weighted moving average of the Newton iteration count.
+	 * Exponentially weighted moving average of the Newton iteration count.
 	 * α = 0.3, so it tracks recent behaviour without overreacting to single spikes.
 	 * Used to set an adaptive ceiling on the next step's iteration budget.
 	 */

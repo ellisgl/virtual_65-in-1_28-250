@@ -1,4 +1,11 @@
 <script lang="ts">
+	/**
+	 * The board's rotary controls (variable capacitor VC1, potentiometer VR1),
+	 * positioned over their footprints in the board artwork (board.svg
+	 * coordinates).  Pure layout/config wrapper — the actual knob interaction
+	 * and rendering live in VariableKnob.svelte; value changes flow back to
+	 * Board.svelte via each config's onChange.
+	 */
 	import VariableKnob from '$lib/components/VariableKnob.svelte';
 
 	interface CapacitorKnobConfig {

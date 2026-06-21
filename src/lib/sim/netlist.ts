@@ -19,6 +19,74 @@ function clamp(value: number, min: number, max: number): number {
 	return Math.max(min, Math.min(max, value));
 }
 
+/**
+ * Resonant frequency of an L·C tank: f = 1 / (2π·√(L·C)).
+ */
+function tankResonanceHz(inductanceH: number, capacitanceF: number): number {
+	if (inductanceH <= 0 || capacitanceF <= 0) return 0;
+	return 1 / (2 * Math.PI * Math.sqrt(inductanceH * capacitanceF));
+}
+
+/**
+ * Detect a crystal-radio receiver in the wiring and, if present, compute the
+ * tank's resonant ("tuning") frequency for the current variable-cap setting.
+ *
+ * The simulator can't represent broadcast-band RF (carriers are ~0.5–1.7 MHz,
+ * far above the audio-rate solver), and in fact the antenna and the plain
+ * multi-tap coil aren't modeled as circuit elements at all — so a crystal set
+ * is electrically silent in the sim.  Instead we recognize the topology and
+ * hand the audio worklet a tuning frequency; it synthesizes the received
+ * audio (stations + static) from that.
+ *
+ * Recognized when an antenna, a detector diode, and a variable tuning
+ * capacitor are all wired into the circuit.  The tank inductance is taken
+ * from the tuning coil's per-segment inductance (two segments are in the
+ * resonant loop in the standard hookup); the capacitance is the live
+ * variable-cap value, so the returned tuningHz tracks the knob.
+ */
+function detectRadio(
+	topology: CircuitTopology,
+	componentById: Map<string, KitComponent>,
+	connectedNodeSet: Set<number>,
+	valueOverrides: Record<string, number>
+): SimulationNetlist['radio'] {
+	const connectedKinds = new Set<string>();
+	let varCap: KitComponent | undefined;
+	let coil: KitComponent | undefined;
+	for (const binding of topology.componentBindings) {
+		if (!binding.nodeIds.some((id) => connectedNodeSet.has(id))) continue;
+		const component = componentById.get(binding.componentId);
+		if (!component) continue;
+		connectedKinds.add(component.kind);
+		if (component.kind === 'variable-capacitor' && !varCap) varCap = component;
+		if (component.kind === 'inductor' && !coil) coil = component;
+	}
+
+	const isRadio =
+		connectedKinds.has('antenna') &&
+		connectedKinds.has('diode') &&
+		connectedKinds.has('variable-capacitor');
+	if (!isRadio || !varCap) return undefined;
+
+	// Tank inductance: two of the tuning coil's segments sit across the
+	// variable cap in the usual hookup.  Fall back to a value that lands the
+	// sweep in the AM band if the coil lacks the metadata.
+	const segmentH = asNumber(coil?.metadata?.segmentInductance);
+	const tankInductanceH = segmentH !== null ? segmentH * 2 : 220e-6;
+
+	const capNow = asNumber(valueOverrides[varCap.id] ?? varCap.value) ?? 0;
+	const capMax = asNumber(varCap.metadata?.max) ?? capNow;
+	const capMin = asNumber(varCap.metadata?.min) ?? capNow;
+
+	return {
+		enabled: true,
+		tuningHz: tankResonanceHz(tankInductanceH, capNow),
+		// Largest C → lowest frequency, and vice-versa.
+		bandLoHz: tankResonanceHz(tankInductanceH, Math.max(capMax, capMin)),
+		bandHiHz: tankResonanceHz(tankInductanceH, Math.min(capMax, capMin))
+	};
+}
+
 export function buildSimulationNetlist(
 	topology: CircuitTopology,
 	components: KitComponent[],
@@ -103,6 +171,37 @@ export function buildSimulationNetlist(
 			continue;
 		}
 
+		if (component.kind === 'earphone') {
+			const leakageOhms = asNumber(component.model?.params?.leakageResistanceOhms) ?? 1_000_000;
+			const capF = asNumber(component.model?.params?.capacitanceFarads) ?? 2.65e-7;
+			if (binding.nodeIds.length !== 2 || capF <= 0 || leakageOhms <= 0) {
+				unsupported.push({
+					componentId: component.id,
+					kind: component.kind,
+					reason: 'Earphone requires two nodes and positive capacitance/leakage params'
+				});
+				continue;
+			}
+			// A piezo/crystal earphone is electrically a small capacitor (its
+			// "600 Ω" rating is |Z| at ~1 kHz, not a real resistance) with a
+			// high parallel bleed resistance.  Model both across the two
+			// terminals; the audio output is the voltage developed across them.
+			elements.push({
+				type: 'capacitor',
+				componentId: `${component.id}:C`,
+				nodes: [binding.nodeIds[0], binding.nodeIds[1]],
+				capacitanceFarads: capF,
+				initialVoltage: 0
+			});
+			elements.push({
+				type: 'resistor',
+				componentId: `${component.id}:Rleak`,
+				nodes: [binding.nodeIds[0], binding.nodeIds[1]],
+				resistanceOhms: leakageOhms
+			});
+			continue;
+		}
+
 		if (component.kind === 'battery') {
 			const voltage = asNumber(valueOverrides[component.id] ?? component.value);
 			const positiveTerminal = asNumber(component.metadata?.positive);
@@ -156,6 +255,107 @@ export function buildSimulationNetlist(
 				nodes: [binding.nodeIds[0], binding.nodeIds[1]],
 				capacitanceFarads,
 				initialVoltage
+			});
+			continue;
+		}
+
+		if (component.kind === 'cds') {
+			// CdS photoresistor.  Two-terminal element whose resistance is
+			// set by the user-controlled light level (0 = dark → R = value,
+			// 1 = bright → R = metadata.lightResistance).  Log-linear
+			// interpolation matches the decade-per-log-lux response of a
+			// real CdS cell — at position 0.5 you get the geometric mean
+			// of dark and light, not the arithmetic mean, which would be
+			// dominated by the (much larger) dark value.
+			const darkOhms   = asNumber(valueOverrides[component.id] ?? component.value);
+			const brightOhms = asNumber(component.metadata?.lightResistance);
+			const position   = clamp(
+				asNumber(positionOverrides[component.id] ?? component.metadata?.defaultPosition) ?? 0.5,
+				0,
+				1
+			);
+
+			if (
+				darkOhms === null   || darkOhms   <= 0 ||
+				brightOhms === null || brightOhms <= 0
+			) {
+				unsupported.push({
+					componentId: component.id,
+					kind: component.kind,
+					reason: 'CdS requires a positive `value` (dark resistance) and metadata.lightResistance (bright resistance)'
+				});
+				continue;
+			}
+
+			const [terminalA, terminalB] = component.terminals;
+			const nodeA = topology.terminalToNode[terminalA];
+			const nodeB = topology.terminalToNode[terminalB];
+			if (typeof nodeA !== 'number' || typeof nodeB !== 'number') {
+				unsupported.push({
+					componentId: component.id,
+					kind: component.kind,
+					reason: 'CdS terminals are missing topology node bindings'
+				});
+				continue;
+			}
+			// Float check — if either node has no connection elsewhere the
+			// resistor would dangle and bloat the MNA without contributing,
+			// so we skip it (matches resistor/potentiometer behaviour).
+			if (!connectedNodeSet.has(nodeA) || !connectedNodeSet.has(nodeB)) {
+				continue;
+			}
+
+			// Log-linear: R(pos) = darkR · (lightR/darkR)^pos
+			//   pos=0   → R = darkR
+			//   pos=0.5 → R = sqrt(darkR · lightR)   (geometric mean)
+			//   pos=1   → R = lightR
+			const resistanceOhms = darkOhms * Math.pow(brightOhms / darkOhms, position);
+
+			elements.push({
+				type: 'resistor',
+				componentId: component.id,
+				nodes: [nodeA, nodeB],
+				resistanceOhms
+			});
+			continue;
+		}
+		
+		if (component.kind === 'solar-cell') {
+			// Solar cell.  Outputs a voltage up to 0.5V depending on light level.
+			const maxVoltage = asNumber(valueOverrides[component.id] ?? component.value) ?? 0.5;
+			const position = clamp(
+				asNumber(positionOverrides[component.id] ?? component.metadata?.defaultPosition) ?? 0.5,
+				0,
+				1
+			);
+
+			const positiveTerminal = asNumber(component.metadata?.positive);
+			const negativeTerminal = asNumber(component.metadata?.negative);
+			const positiveNode = positiveTerminal === null ? undefined : topology.terminalToNode[positiveTerminal];
+			const negativeNode = negativeTerminal === null ? undefined : topology.terminalToNode[negativeTerminal];
+
+			if (typeof positiveNode !== 'number' || typeof negativeNode !== 'number') {
+				unsupported.push({
+					componentId: component.id,
+					kind: component.kind,
+					reason: 'Solar cell terminals are missing topology node bindings'
+				});
+				continue;
+			}
+
+			if (!connectedNodeSet.has(positiveNode) && !connectedNodeSet.has(negativeNode)) {
+				continue;
+			}
+
+			// Linear output: 0 at dark (0), max at bright (1).
+			const voltage = maxVoltage * position;
+
+			elements.push({
+				type: 'voltage-source',
+				componentId: component.id,
+				positiveNode,
+				negativeNode,
+				voltage
 			});
 			continue;
 		}
@@ -323,7 +523,7 @@ export function buildSimulationNetlist(
 				unsupported.push({
 					componentId: component.id,
 					kind: component.kind,
-					reason: 'Transistor terminals are missing topology node bindings'
+					reason: `Transistor terminals (B:${base}, C:${collector}, E:${emitter}) are missing topology node bindings`
 				});
 				continue;
 			}
@@ -365,6 +565,7 @@ export function buildSimulationNetlist(
 			const normallyOpen = asNumber(component.metadata?.normallyOpen) ?? component.terminals[4] ?? null;
 
 			const coilResistanceOhms = asNumber(component.model?.params?.coilResistanceOhms) ?? 150;
+			const coilInductanceH = asNumber(component.model?.params?.inductance) ?? 0;
 			const ronOhms = asNumber(component.model?.params?.ron) ?? 0.05;
 			const roffOhms = asNumber(component.model?.params?.roff) ?? 1_000_000;
 			const onCurrent = asNumber(component.model?.params?.onCurrent) ?? 0.02;
@@ -410,10 +611,30 @@ export function buildSimulationNetlist(
 				continue;
 			}
 
+			// The relay's coil inductance matters: in self-interrupting (buzzer)
+			// circuits, the L/R rise time of the coil current is what sets the
+			// buzz rate.  The WASM relay element models the coil as pure
+			// resistance + hysteresis switch, so without this series inductor
+			// the relay chatters at solver-step rate (~70 kHz, ultrasonic and
+			// numerically nasty) instead of buzzing at the mechanical ~330 Hz
+			// the same model produces with L included.  At DC the inductor is
+			// a short, so stable relay circuits are unaffected.
+			let relayCoilPositiveNode = coilPositiveNode;
+			if (coilInductanceH > 0) {
+				const coilMid = allocInternalNode();
+				elements.push({
+					type: 'inductor',
+					componentId: `${component.id}:Lcoil`,
+					nodes: [coilPositiveNode, coilMid],
+					inductanceHenry: coilInductanceH
+				});
+				relayCoilPositiveNode = coilMid;
+			}
+
 			elements.push({
 				type: 'relay',
 				componentId: component.id,
-				coilPositiveNode,
+				coilPositiveNode: relayCoilPositiveNode,
 				coilNegativeNode,
 				commonNode,
 				normallyClosedNode,
@@ -438,6 +659,7 @@ export function buildSimulationNetlist(
 			const rsOhm = asNumber(component.metadata?.rsOhm);
 			const lp1H = asNumber(component.metadata?.lp1H) ?? 0.4;
 			const lsH = asNumber(component.metadata?.lsH) ?? 0.004;
+			const k = asNumber(component.metadata?.coupling) ?? 0.999;
 
 			if (primaryStart===null || primaryCenterTap===null || primaryEnd===null ||
 				secondaryStart===null || secondaryEnd===null ||
@@ -454,7 +676,6 @@ export function buildSimulationNetlist(
 			const nPe = topology.terminalToNode[primaryEnd];
 			const nSs = topology.terminalToNode[secondaryStart];
 			const nSe = topology.terminalToNode[secondaryEnd];
-
 			if (typeof nPs!=='number' || typeof nPc!=='number' || typeof nPe!=='number' ||
 				typeof nSs!=='number' || typeof nSe!=='number') {
 				unsupported.push({ componentId: component.id, kind: component.kind, reason: 'Transformer terminals missing node bindings' });
@@ -473,18 +694,7 @@ export function buildSimulationNetlist(
 			// current rises through Lp1, the induced EMF in Lp2 drives the
 			// base further negative (PNP), latching Q2 ON harder. This is the
 			// regenerative feedback that makes the blocking oscillator slow.
-			//
-			// Coupling coefficient — empirical value, NOT the datasheet.
-			// The LT700 datasheet specifies k ≈ 0.995, but the branch-current
-			// MNA in this simulator overshoots violently at that value: the
-			// reflected secondary load + BJT junction caps can't damp out
-			// the rapid flux transfer from primary to secondary.
-			// k = 0.1 is the empirically-tuned value that gives stable
-			// blocking-oscillator behaviour in the metronome / siren circuits.
-			// (Datasheet value is preserved in components.ts as
-			// `couplingDatasheet` for reference only.)
 			const couplingGroup = `${component.id}:core`;
-			const k = 0.1;
 			const lsHeff = lsH; // secondary inductance from metadata (~4mH)
 
 			const midP1 = allocInternalNode();
@@ -715,7 +925,8 @@ export function buildSimulationNetlist(
 		elements,
 		unsupported,
 		groundNodeId: topology.groundNodeId,
-		connectedNodeIds: topology.connectedNodeIds
+		connectedNodeIds: topology.connectedNodeIds,
+		radio: detectRadio(topology, componentById, connectedNodeSet, valueOverrides)
 	};
 }
 

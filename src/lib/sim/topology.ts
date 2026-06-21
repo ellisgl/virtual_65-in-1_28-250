@@ -34,7 +34,12 @@ class UnionFind {
 	}
 }
 
-function getGroundTerminal(allTerminals: Set<number>): number | null {
+function getGroundTerminal(allTerminals: Set<number>, connectedTerminals: Set<number>): number | null {
+	// First pass: look for a ground terminal that is actually wired.
+	for (const terminalId of GROUND_TERMINAL_IDS) {
+		if (allTerminals.has(terminalId) && connectedTerminals.has(terminalId)) return terminalId;
+	}
+	// Second pass: fallback to any ground terminal if none are wired.
 	for (const terminalId of GROUND_TERMINAL_IDS) {
 		if (allTerminals.has(terminalId)) return terminalId;
 	}
@@ -44,6 +49,7 @@ function getGroundTerminal(allTerminals: Set<number>): number | null {
 export function buildCircuitTopology(wires: Wire[], components: KitComponent[]): CircuitTopology {
 	const uf = new UnionFind();
 	const allTerminals = new Set<number>();
+	const connectedTerminals = new Set<number>();
 
 	for (const component of components) {
 		for (const terminal of component.terminals) {
@@ -55,14 +61,8 @@ export function buildCircuitTopology(wires: Wire[], components: KitComponent[]):
 	for (const wire of wires) {
 		if (!allTerminals.has(wire.fromTerminal) || !allTerminals.has(wire.toTerminal)) continue;
 		uf.union(wire.fromTerminal, wire.toTerminal);
-	}
-
-	const existingGrounds = GROUND_TERMINAL_IDS.filter((terminalId) => allTerminals.has(terminalId));
-	if (existingGrounds.length > 1) {
-		const firstGround = existingGrounds[0];
-		for (let idx = 1; idx < existingGrounds.length; idx++) {
-			uf.union(firstGround, existingGrounds[idx]);
-		}
+		connectedTerminals.add(wire.fromTerminal);
+		connectedTerminals.add(wire.toTerminal);
 	}
 
 	const groups = new Map<number, number[]>();
@@ -116,7 +116,7 @@ export function buildCircuitTopology(wires: Wire[], components: KitComponent[]):
 		})
 	}));
 
-	const groundTerminal = getGroundTerminal(allTerminals);
+	const groundTerminal = getGroundTerminal(allTerminals, connectedTerminals);
 	const groundNodeId = groundTerminal === null ? null : (terminalToNode[groundTerminal] ?? null);
 
 	return {
