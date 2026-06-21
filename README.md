@@ -1,6 +1,6 @@
 # Virtual Science Fair 65-in-1 Electronic Project Kit (Cat# 28-250)
 
-A browser-based circuit simulator for the classic Radio Shack spring-terminal 65-in-1 kit. I'm dedicating this to my Father, who was electronics engineer and hobbyist till the end.
+A browser-based circuit simulator for the classic Radio Shack spring-terminal 65-in-1 kit. I'm dedicating this to my Father, who was an electronics engineer and hobbyist till the end.
 
 **[Try it live →](https://ellisgl.github.io/virtual_65-in-1_28-250/)**
 
