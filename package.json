@@ -45,5 +45,8 @@
 	"imports": {
 		"#lib": "./src/lib",
 		"#lib/*": "./src/lib/*"
+	},
+	"overrides": {
+		"minimatch": "^11.0.1"
 	}
 }
