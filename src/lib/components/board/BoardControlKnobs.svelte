@@ -6,7 +6,7 @@
 	 * and rendering live in VariableKnob.svelte; value changes flow back to
 	 * Board.svelte via each config's onChange.
 	 */
-	import VariableKnob from '$lib/components/VariableKnob.svelte';
+	import VariableKnob from '#lib/components/VariableKnob.svelte';
 
 	interface CapacitorKnobConfig {
 		x: number;

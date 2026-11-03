@@ -1,22 +1,22 @@
 <script lang="ts">
 	import { onDestroy, untrack } from 'svelte';
-	import { KIT_COMPONENTS, KIT_TERMINAL_IDS, TERMINAL_POSITIONS, isTerminalPositionMapped } from '$lib/data';
-	import Terminal from '$lib/components/Terminal.svelte';
-	import WiringLayer from '$lib/components/WiringLayer.svelte';
-	import BoardControlKnobs from '$lib/components/board/BoardControlKnobs.svelte';
-	import { formatCapacitance, formatPotPosition, voltageToColor } from '$lib/components/board/helpers';
-	import KeySwitchOverlay from '$lib/components/board/KeySwitchOverlay.svelte';
-	import LampGlowOverlay from '$lib/components/board/LampGlowOverlay.svelte';
-	import RelayStateOverlay from '$lib/components/board/RelayStateOverlay.svelte';
-	import VoltmeterOverlay from '$lib/components/board/VoltmeterOverlay.svelte';
-	import { buildSimulationNetlist } from '$lib/sim';
-	import { initRustDc, isRustDcReady, solveDcRust } from '$lib/sim/dc-rust';
-	import { SimRustWorkletHost } from '$lib/sim/sim-rust-worklet-host';
-	import type { ControlState, WireSpec, DiagnosticCapture } from '$lib/sim/sim-rust-worklet-host';
-	import { wiresStore } from '$lib/stores/wires.svelte';
-	import { playRelayClick } from '$lib/audio/relay-click';
-	import type { DcSolution } from '$lib/types';
-	import { base } from '$app/paths';
+	import { KIT_COMPONENTS, KIT_TERMINAL_IDS, TERMINAL_POSITIONS, isTerminalPositionMapped } from '#lib/data';
+	import Terminal from '#lib/components/Terminal.svelte';
+	import WiringLayer from '#lib/components/WiringLayer.svelte';
+	import BoardControlKnobs from '#lib/components/board/BoardControlKnobs.svelte';
+	import { formatCapacitance, formatPotPosition, voltageToColor } from '#lib/components/board/helpers';
+	import KeySwitchOverlay from '#lib/components/board/KeySwitchOverlay.svelte';
+	import LampGlowOverlay from '#lib/components/board/LampGlowOverlay.svelte';
+	import RelayStateOverlay from '#lib/components/board/RelayStateOverlay.svelte';
+	import VoltmeterOverlay from '#lib/components/board/VoltmeterOverlay.svelte';
+	import { buildSimulationNetlist } from '#lib/sim';
+	import { initRustDc, isRustDcReady, solveDcRust } from '#lib/sim/dc-rust';
+	import { SimRustWorkletHost } from '#lib/sim/sim-rust-worklet-host';
+	import type { ControlState, WireSpec, DiagnosticCapture } from '#lib/sim/sim-rust-worklet-host';
+	import { wiresStore } from '#lib/stores/wires.svelte';
+	import { playRelayClick } from '#lib/audio/relay-click';
+	import type { DcSolution } from '#lib/types';
+	import { asset } from '$app/paths';
 
 	const mappedTerminalIds = KIT_TERMINAL_IDS.filter((id) => isTerminalPositionMapped(id));
 	const TERMINAL_SNAP_RADIUS = 4;
@@ -365,7 +365,7 @@
 		audioMasterGain.connect(audioContext.destination);
 
 		try {
-			const host = new SimRustWorkletHost(audioContext, base);
+			const host = new SimRustWorkletHost(audioContext);
 			host.onSnapshot = (volts) => { workletVoltages = volts; };
 			host.onError    = (msg)   => {
 				console.error('[worklet] sim failure:', msg);
@@ -784,7 +784,7 @@
 	</div>
 
 	<div class="board-container">
-		<img src="{base}/board.svg" alt="Science Fair 65-in-1 board artwork" class="board-image" />
+		<img src={asset('board.svg')} alt="Science Fair 65-in-1 board artwork" class="board-image" />
 		<svg
 			class="overlay"
 			viewBox={`0 0 ${BOARD_VIEWBOX_WIDTH} ${BOARD_VIEWBOX_HEIGHT}`}

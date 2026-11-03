@@ -1,4 +1,4 @@
-import type { DeviceModel, KitComponent } from '$lib/types';
+import type { DeviceModel, KitComponent } from '#lib/types';
 
 const model2SB56: DeviceModel = {
 	name: '2SB56',

@@ -1,7 +1,7 @@
 /**
  * WASM-backed sparse LU module.
  *
- * Drop-in replacement for `$lib/sim/sparse` once the WASM build is in place.
+ * Drop-in replacement for `#lib/sim/sparse` once the WASM build is in place.
  * Same API surface as the TypeScript module — same function names, same
  * argument order, same numerical output (verified by parity tests).
  *
@@ -28,7 +28,7 @@ import init, {
     sparseSolveInPlace as _wasmSolve,
     minimumDegreeOrder as _wasmMd,
     SparseLuPattern as _WasmSparseLuPattern,
-} from '$lib/sim/wasm/sim_wasm.js';
+} from '#lib/sim/wasm/sim_wasm.js';
 
 // Re-exported under the JS-facing name so the wasm `SparseLuPattern` is a
 // plug-in replacement for the existing TS `SparseLUPattern` type at use sites.

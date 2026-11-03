@@ -1,7 +1,7 @@
 /**
  * WASM-backed transistor stamp.
  *
- * Drop-in replacement for `$lib/sim/transistor` once the WASM build is in
+ * Drop-in replacement for `#lib/sim/transistor` once the WASM build is in
  * place.  Same function signature, same numerical output.
  *
  * Same Phase 2 caveat as `diode-wasm.ts`: this adapter constructs a fresh
@@ -12,8 +12,8 @@
 import init, {
     Transistor as WasmTransistor,
     computeTransistorStamp as wasmComputeTransistorStamp,
-} from '$lib/sim/wasm/sim_wasm.js';
-import type { SimulationTransistorElement } from '$lib/types';
+} from '#lib/sim/wasm/sim_wasm.js';
+import type { SimulationTransistorElement } from '#lib/types';
 
 export interface TransistorStamp {
     gBe:   number;
