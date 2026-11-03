@@ -1,7 +1,7 @@
-import { KIT_COMPONENTS } from '$lib/data/components';
-import { TERMINAL_POSITIONS } from '$lib/data/terminalPositions';
-import { buildCircuitTopology } from '$lib/sim/topology';
-import type { DragState, Wire } from '$lib/types';
+import { KIT_COMPONENTS } from '#lib/data/components';
+import { TERMINAL_POSITIONS } from '#lib/data/terminalPositions';
+import { buildCircuitTopology } from '#lib/sim/topology';
+import type { DragState, Wire } from '#lib/types';
 
 // ── Wire colour model ────────────────────────────────────────────────────────
 //

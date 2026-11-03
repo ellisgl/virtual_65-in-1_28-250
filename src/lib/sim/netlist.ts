@@ -5,7 +5,7 @@ import type {
 	SimulationBuildOptions,
 	SimulationNetlist,
 	UnsupportedElement
-} from '$lib/types';
+} from '#lib/types';
 
 function usesConnectedNode(nodeIds: number[], connected: Set<number>): boolean {
 	return nodeIds.some((id) => connected.has(id));

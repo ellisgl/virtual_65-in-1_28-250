@@ -1,5 +1,5 @@
-import { KIT_TERMINAL_IDS } from '$lib/data/components';
-import type { TerminalPosition } from '$lib/types';
+import { KIT_TERMINAL_IDS } from '#lib/data/components';
+import type { TerminalPosition } from '#lib/types';
 
 // Use -1 placeholders until springs are measured from the board artwork.
 export const TERMINAL_POSITIONS: Record<number, TerminalPosition> = Object.fromEntries(

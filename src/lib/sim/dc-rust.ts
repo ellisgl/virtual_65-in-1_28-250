@@ -24,11 +24,11 @@
  * compatible with everything that currently consumes TS DC output.
  */
 
-import init from '$lib/sim/wasm/sim_wasm.js';
-import wasmUrl from '$lib/sim/wasm/sim_wasm_bg.wasm?url';
-import { browser } from '$app/environment';
-import { WasmTransientSimulator } from '$lib/sim/transient-wasm';
-import type { DcSolution, SimulationNetlist } from '$lib/types';
+import init from '#lib/sim/wasm/sim_wasm.js';
+import wasmUrl from '#lib/sim/wasm/sim_wasm_bg.wasm?url';
+import { browser } from '$app/env';
+import { WasmTransientSimulator } from '#lib/sim/transient-wasm';
+import type { DcSolution, SimulationNetlist } from '#lib/types';
 
 // ── WASM init ───────────────────────────────────────────────────────────────
 

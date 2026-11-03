@@ -1,5 +1,5 @@
-import type { CircuitNode, CircuitTopology, KitComponent, Wire } from '$lib/types';
-import { GROUND_TERMINAL_IDS } from '$lib/sim/config';
+import type { CircuitNode, CircuitTopology, KitComponent, Wire } from '#lib/types';
+import { GROUND_TERMINAL_IDS } from '#lib/sim/config';
 
 class UnionFind {
 	private parent = new Map<number, number>();

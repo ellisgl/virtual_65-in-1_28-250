@@ -19,10 +19,11 @@
  * the verbose host + worklet logging.
  */
 
-import type { SimulationNetlist } from '$lib/types';
-import { KIT_COMPONENTS } from '$lib/data/components';
-import { buildCircuitTopology } from '$lib/sim/topology';
-import { buildSimulationNetlist } from '$lib/sim/netlist';
+import type { SimulationNetlist } from '#lib/types';
+import { KIT_COMPONENTS } from '#lib/data/components';
+import { buildCircuitTopology } from '#lib/sim/topology';
+import { buildSimulationNetlist } from '#lib/sim/netlist';
+import { asset } from '$app/paths';
 
 export type NodeVoltages = Record<number, number>;
 export type AudioProbe = 'voltage' | 'current';
@@ -108,7 +109,6 @@ async function loadWasmModule(url: string): Promise<WebAssembly.Module> {
 
 export class SimRustWorkletHost {
     private ctx: AudioContext;
-    private base: string;
     private node: AudioWorkletNode | null = null;
     private wires: WireSpec[] = [];
     private isAlreadyReady = false;
@@ -126,14 +126,12 @@ export class SimRustWorkletHost {
     onDiagnosticCapture: ((capture: DiagnosticCapture) => void) | null = null;
 
     /**
-     * @param ctx      The AudioContext to connect to.
-     * @param basePath The SvelteKit `base` path (e.g. '/my-repo' on GitHub Pages,
-     *                 '' for a root deployment).  Pass `import { base } from
-     *                 '$app/paths'` from the calling component.
+     * @param ctx The AudioContext to connect to.  Static worklet/WASM URLs are
+     *            resolved with SvelteKit's `asset()`, so the configured base
+     *            path (e.g. '/my-repo' on GitHub Pages) is applied automatically.
      */
-    constructor(ctx: AudioContext, basePath = '')  {
+    constructor(ctx: AudioContext) {
         this.ctx = ctx;
-        this.base = basePath;
     }
 
     public isReady(): boolean {
@@ -157,15 +155,15 @@ export class SimRustWorkletHost {
         // AudioContext share one WorkletGlobalScope, and the polyfill
         // provides TextDecoder/TextEncoder that the wasm-bindgen glue in
         // sim-rust-worklet.js needs at module-evaluation time.
-        await this.ctx.audioWorklet.addModule(`${this.base}/audio/sim-worklet-polyfill.js`);
-        await this.ctx.audioWorklet.addModule(`${this.base}/audio/sim-rust-worklet.js`);
+        await this.ctx.audioWorklet.addModule(asset('audio/sim-worklet-polyfill.js'));
+        await this.ctx.audioWorklet.addModule(asset('audio/sim-rust-worklet.js'));
 
         // The compiled WASM module is passed in processorOptions so the
         // processor can mount it *synchronously* in its constructor
         // (initSync).  An earlier async init()-then-postMessage handshake
         // raced with Svelte $effects firing as soon as the host became
         // non-null, and could deadlock the first run.
-        const wasmModule = await loadWasmModule(`${this.base}/audio/sim_wasm_bg.wasm`);
+        const wasmModule = await loadWasmModule(asset('audio/sim_wasm_bg.wasm'));
         this.node = new AudioWorkletNode(this.ctx, 'sim-rust-processor', {
             numberOfInputs:  0,
             numberOfOutputs: 1,

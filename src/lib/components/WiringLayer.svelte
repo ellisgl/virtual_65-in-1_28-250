@@ -1,6 +1,6 @@
 <script lang="ts">
-    import {TERMINAL_POSITIONS} from '$lib/data';
-    import type {Wire, DragState} from '$lib/types';
+    import {TERMINAL_POSITIONS} from '#lib/data';
+    import type {Wire, DragState} from '#lib/types';
 
     interface Props {
         wires: Wire[];

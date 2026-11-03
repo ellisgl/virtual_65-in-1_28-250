@@ -25,8 +25,8 @@ import init, {
     Diode as WasmDiode,
     Transistor as WasmTransistor,
     StepResult as WasmStepResult,
-} from '$lib/sim/wasm/sim_wasm.js';
-import type { SimulationNetlist } from '$lib/types';
+} from '#lib/sim/wasm/sim_wasm.js';
+import type { SimulationNetlist } from '#lib/types';
 
 let _ready: Promise<void> | null = null;
 export function initSimWasm(): Promise<void> {

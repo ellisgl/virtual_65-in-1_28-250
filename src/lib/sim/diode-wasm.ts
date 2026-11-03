@@ -1,7 +1,7 @@
 /**
  * WASM-backed diode stamp.
  *
- * Drop-in replacement for `$lib/sim/diode` once the WASM build is in place.
+ * Drop-in replacement for `#lib/sim/diode` once the WASM build is in place.
  * Same function signature, same numerical output.
  *
  * Lifecycle
@@ -20,8 +20,8 @@
 import init, {
     Diode as WasmDiode,
     computeDiodeStamp as wasmComputeDiodeStamp,
-} from '$lib/sim/wasm/sim_wasm.js';
-import type { SimulationDiodeElement } from '$lib/types';
+} from '#lib/sim/wasm/sim_wasm.js';
+import type { SimulationDiodeElement } from '#lib/types';
 
 export interface DiodeStamp {
     gd: number;
