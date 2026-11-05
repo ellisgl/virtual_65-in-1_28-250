@@ -112,19 +112,19 @@ export class Simulator {
      * as a single JS object.
      */
     get_full_state(): any;
-    import_cap_volts(v: Float64Array): void;
+    import_cap_volts(v: Float64Array | number[]): void;
     import_gear2_ready(ready: boolean): void;
-    import_inductor_currents(v: Float64Array): void;
+    import_inductor_currents(v: Float64Array | number[]): void;
     /**
      * Restore `node_volts`.  Silently ignored on length mismatch.
      */
-    import_node_volts(v: Float64Array): void;
-    import_prev_cap_volts(v: Float64Array): void;
+    import_node_volts(v: Float64Array | number[]): void;
+    import_prev_cap_volts(v: Float64Array | number[]): void;
     import_prev_dt(dt: number): void;
-    import_prev_inductor_currents(v: Float64Array): void;
-    import_prev_node_volts(v: Float64Array): void;
-    import_relay_active(v: Uint8Array): void;
-    import_tj_cap_volts(v: Float64Array): void;
+    import_prev_inductor_currents(v: Float64Array | number[]): void;
+    import_prev_node_volts(v: Float64Array | number[]): void;
+    import_relay_active(v: Uint8Array | number[]): void;
+    import_tj_cap_volts(v: Float64Array | number[]): void;
     /**
      * Per-inductor branch current by component id.  Returns 0.0 if the
      * component is unknown or the simulator hasn't been compiled/stepped.
@@ -137,6 +137,16 @@ export class Simulator {
      * which mixes resistive drop and inductive EMF.
      */
     inductor_current(id: string): number;
+    /**
+     * Inductor branch current by probe index (see `inductor_index`).
+     * 0.0 for an out-of-range index.
+     */
+    inductor_current_at(index: number): number;
+    /**
+     * Resolve an inductor id to a probe index for `inductor_current_at`,
+     * or `-1` if unknown / not compiled.  Valid until the next `compile()`.
+     */
+    inductor_index(id: string): number;
     /**
      * Create an empty simulator with `ground_node_id` as the reference.
      */
@@ -233,6 +243,22 @@ export class Simulator {
      */
     voltage_source_current(id: string): number;
     /**
+     * Voltage-source branch current by probe index (see
+     * `voltage_source_index`).  Same sign convention as
+     * `voltage_source_current`; 0.0 for an out-of-range index.
+     */
+    voltage_source_current_at(index: number): number;
+    /**
+     * Resolve a voltage source id to a stable probe index for
+     * `voltage_source_current_at`, or `-1` if unknown / not compiled.
+     *
+     * Resolve once after `compile()` and read by index in the audio loop:
+     * the `&str` overload has to UTF-8-encode the JS string into wasm
+     * memory (alloc + copy + free) and linearly scan elements on every
+     * call.  The index stays valid until the next `compile()`.
+     */
+    voltage_source_index(id: string): number;
+    /**
      * Total node count after compile (0 if not yet compiled).
      */
     readonly node_count: number;
@@ -316,7 +342,7 @@ export class TransistorStamp {
  * `marker` must be of length `n*n`.  `marker[i*n+j] != 0` means position
  * `(i,j)` may carry a non-zero value during factorization.
  */
-export function analyzePattern(marker: Uint8Array, n: number): SparseLuPattern;
+export function analyzePattern(marker: Uint8Array | number[], n: number): SparseLuPattern;
 
 /**
  * Compute the diode stamp for the current Newton iterate.
@@ -325,12 +351,12 @@ export function analyzePattern(marker: Uint8Array, n: number): SparseLuPattern;
  * supplied, the SPICE pnjlim limiter engages on large junction-voltage
  * swings — required for transient mode, omitted in DC operating-point.
  */
-export function computeDiodeStamp(diode: Diode, volts: Float64Array, ai: number, ki: number, prev_volts?: Float64Array | null): DiodeStamp;
+export function computeDiodeStamp(diode: Diode, volts: Float64Array | number[], ai: number, ki: number, prev_volts?: Float64Array | number[] | null): DiodeStamp;
 
 /**
  * Compute the transistor stamp for the current Newton iterate.
  */
-export function computeTransistorStamp(q: Transistor, volts: Float64Array, bi: number, ci: number, ei: number, prev_volts?: Float64Array | null): TransistorStamp;
+export function computeTransistorStamp(q: Transistor, volts: Float64Array | number[], bi: number, ci: number, ei: number, prev_volts?: Float64Array | number[] | null): TransistorStamp;
 
 /**
  * Greedy Minimum Degree elimination ordering.
@@ -341,7 +367,7 @@ export function computeTransistorStamp(q: Transistor, volts: Float64Array, bi: n
  * Returns the elimination order: `order[k] = i` means "eliminate row i at
  * step k".
  */
-export function minimumDegreeOrder(n: number, flat_edges: Int32Array): Int32Array;
+export function minimumDegreeOrder(n: number, flat_edges: Int32Array | number[]): Int32Array;
 
 /**
  * Numeric LU factorization in place using a precomputed symbolic pattern.
@@ -356,7 +382,7 @@ export function numericFactor(mat: Float64Array, n: number, pat: SparseLuPattern
  * Solve `(L * U) * x = rhs` using a matrix already factored by
  * `numeric_factor`.  The solution overwrites `rhs` on return.
  */
-export function sparseSolveInPlace(mat: Float64Array, rhs: Float64Array, n: number, pat: SparseLuPattern): void;
+export function sparseSolveInPlace(mat: Float64Array | number[], rhs: Float64Array, n: number, pat: SparseLuPattern): void;
 
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
@@ -417,6 +443,8 @@ export interface InitOutput {
     readonly simulator_import_relay_active: (a: number, b: number, c: number) => void;
     readonly simulator_import_tj_cap_volts: (a: number, b: number, c: number) => void;
     readonly simulator_inductor_current: (a: number, b: number, c: number) => number;
+    readonly simulator_inductor_current_at: (a: number, b: number) => number;
+    readonly simulator_inductor_index: (a: number, b: number, c: number) => number;
     readonly simulator_new: (a: number) => number;
     readonly simulator_node_count: (a: number) => number;
     readonly simulator_node_voltage: (a: number, b: number) => number;
@@ -428,9 +456,13 @@ export interface InitOutput {
     readonly simulator_update_resistor: (a: number, b: number, c: number, d: number) => number;
     readonly simulator_update_voltage_source: (a: number, b: number, c: number, d: number) => number;
     readonly simulator_voltage_source_current: (a: number, b: number, c: number) => number;
+    readonly simulator_voltage_source_current_at: (a: number, b: number) => number;
+    readonly simulator_voltage_source_index: (a: number, b: number, c: number) => number;
     readonly sparseSolveInPlace: (a: number, b: number, c: number, d: number, e: any, f: number, g: number) => void;
     readonly sparselupattern_n: (a: number) => number;
     readonly transistor_new: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number, s: number, t: number, u: number, v: number, w: number, x: number, y: number, z: number, a1: number, b1: number, c1: number) => number;
+    readonly transistorstamp_gBc: (a: number) => number;
+    readonly transistorstamp_gBe: (a: number) => number;
     readonly transistorstamp_gm: (a: number) => number;
     readonly transistorstamp_gmu: (a: number) => number;
     readonly transistorstamp_gmu_b: (a: number) => number;
@@ -438,14 +470,12 @@ export interface InitOutput {
     readonly transistorstamp_iEqB: (a: number) => number;
     readonly transistorstamp_iEqC: (a: number) => number;
     readonly transistorstamp_iEqE: (a: number) => number;
-    readonly transistorstamp_gBc: (a: number) => number;
-    readonly transistorstamp_gBe: (a: number) => number;
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
+    readonly __wbindgen_free: (a: number, b: number, c: number) => void;
     readonly __wbindgen_exn_store: (a: number) => void;
     readonly __externref_table_alloc: () => number;
     readonly __wbindgen_externrefs: WebAssembly.Table;
-    readonly __wbindgen_free: (a: number, b: number, c: number) => void;
     readonly __externref_table_dealloc: (a: number) => void;
     readonly __wbindgen_start: () => void;
 }

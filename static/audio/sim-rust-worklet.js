@@ -304,6 +304,9 @@ class SimRustProcessor extends AudioWorkletProcessor {
         // V across the speaker.  'current' reads the actual coil current
         // through SPK1:Lvc — the physically-correct cone-driving signal.
         this.audioProbe = 'voltage';
+        // Probe index for SPK1:Lvc, resolved once per compile() so the
+        // per-sample read avoids string marshalling + a linear id scan.
+        this.spkLvcIndex = -1;
 
         // ── Diagnostic raw-waveform capture ───────────────────────────────────────────
         // Triggered by { type: 'startDiagnosticCapture', seconds } message.
@@ -696,6 +699,9 @@ class SimRustProcessor extends AudioWorkletProcessor {
                         if (ok) {
                             if (this.sim.compile()) {
                                 // Successfully updated parameters in-place!
+                                // Probe indices are only valid until the
+                                // next compile(), so re-resolve them.
+                                this.resolveProbeIndices();
                                 break;
                             }
                         }
@@ -809,7 +815,13 @@ class SimRustProcessor extends AudioWorkletProcessor {
         }
     }
 
+    /** Resolve wasm probe indices; must be re-run after every compile(). */
+    resolveProbeIndices() {
+        this.spkLvcIndex = this.sim ? this.sim.inductor_index('SPK1:Lvc') : -1;
+    }
+
     cacheSpeakerProbes(netlist) {
+        this.resolveProbeIndices();
         this.speakerTopA = -1; this.speakerTopB = -1;
         this.t1PrimaryTop = -1; this.t1CenterTop = -1;
         this.earphoneA = -1; this.earphoneB = -1;
@@ -875,7 +887,7 @@ class SimRustProcessor extends AudioWorkletProcessor {
         let real_sim_nan = false;     // simulator returned non-finite
 
         if (this.audioProbe === 'current') {
-            const i = this.sim.inductor_current('SPK1:Lvc');
+            const i = this.sim.inductor_current_at(this.spkLvcIndex);
             if (Number.isNaN(i)) {
                 real_sim_nan = true;
             } else {

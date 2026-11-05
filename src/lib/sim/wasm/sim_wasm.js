@@ -96,9 +96,13 @@ export class Simulator {
      * @param {number} initial_voltage
      */
     add_capacitor(id, a, b, capacitance_farads, initial_voltage) {
+        const val2 = +a;
+        const val3 = +b;
+        const val4 = +capacitance_farads;
+        const val5 = +initial_voltage;
         const ptr0 = passStringToWasm0(id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
-        wasm.simulator_add_capacitor(this.__wbg_ptr, ptr0, len0, a, b, capacitance_farads, initial_voltage);
+        wasm.simulator_add_capacitor(this.__wbg_ptr, ptr0, len0, val2, val3, val4, val5);
     }
     /**
      * Add a mutual-inductance coupling element binding all inductors
@@ -110,11 +114,19 @@ export class Simulator {
      * @param {number} k
      */
     add_coupling(id, coupling_group, k) {
-        const ptr0 = passStringToWasm0(id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len0 = WASM_VECTOR_LEN;
-        const ptr1 = passStringToWasm0(coupling_group, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len1 = WASM_VECTOR_LEN;
-        wasm.simulator_add_coupling(this.__wbg_ptr, ptr0, len0, ptr1, len1, k);
+        const val3 = +k;
+        let ptr0, len0, ptr1, len1;
+        try {
+            ptr0 = passStringToWasm0(id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            len0 = WASM_VECTOR_LEN;
+            ptr1 = passStringToWasm0(coupling_group, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            len1 = WASM_VECTOR_LEN;
+        } catch (e) {
+            if (ptr1) { wasm.__wbindgen_free(ptr1, len1 * 1, 1); }
+            if (ptr0) { wasm.__wbindgen_free(ptr0, len0 * 1, 1); }
+            throw e;
+        }
+        wasm.simulator_add_coupling(this.__wbg_ptr, ptr0, len0, ptr1, len1, val3);
     }
     /**
      * @param {string} id
@@ -123,10 +135,12 @@ export class Simulator {
      * @param {Diode} diode
      */
     add_diode(id, anode, cathode, diode) {
+        _assertClass(diode, Diode);
+        const val2 = +anode;
+        const val3 = +cathode;
         const ptr0 = passStringToWasm0(id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
-        _assertClass(diode, Diode);
-        wasm.simulator_add_diode(this.__wbg_ptr, ptr0, len0, anode, cathode, diode.__wbg_ptr);
+        wasm.simulator_add_diode(this.__wbg_ptr, ptr0, len0, val2, val3, diode.__wbg_ptr);
     }
     /**
      * Add an inductor.  Optional `coupling_group` + `coupling_polarity`
@@ -142,11 +156,23 @@ export class Simulator {
      * @param {number | null} [coupling_polarity]
      */
     add_inductor(id, a, b, inductance_henry, saturation_current_a, coupling_group, coupling_polarity) {
-        const ptr0 = passStringToWasm0(id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len0 = WASM_VECTOR_LEN;
-        var ptr1 = isLikeNone(coupling_group) ? 0 : passStringToWasm0(coupling_group, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        var len1 = WASM_VECTOR_LEN;
-        wasm.simulator_add_inductor(this.__wbg_ptr, ptr0, len0, a, b, inductance_henry, !isLikeNone(saturation_current_a), isLikeNone(saturation_current_a) ? 0 : saturation_current_a, ptr1, len1, isLikeNone(coupling_polarity) ? Number.MAX_SAFE_INTEGER : (coupling_polarity) >> 0);
+        const val3 = +a;
+        const val4 = +b;
+        const val5 = +inductance_henry;
+        const val6 = +(isLikeNone(saturation_current_a) ? 0 : saturation_current_a);
+        const val7 = +(isLikeNone(coupling_polarity) ? Number.MAX_SAFE_INTEGER : (coupling_polarity) >> 0);
+        let ptr0, len0, ptr1, len1;
+        try {
+            ptr0 = passStringToWasm0(id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            len0 = WASM_VECTOR_LEN;
+            ptr1 = isLikeNone(coupling_group) ? 0 : passStringToWasm0(coupling_group, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            len1 = WASM_VECTOR_LEN;
+        } catch (e) {
+            if (ptr1) { wasm.__wbindgen_free(ptr1, len1 * 1, 1); }
+            if (ptr0) { wasm.__wbindgen_free(ptr0, len0 * 1, 1); }
+            throw e;
+        }
+        wasm.simulator_add_inductor(this.__wbg_ptr, ptr0, len0, val3, val4, val5, !isLikeNone(saturation_current_a), val6, ptr1, len1, val7);
     }
     /**
      * Add an SPDT relay.  All five terminals are topology node IDs.  The
@@ -171,9 +197,19 @@ export class Simulator {
      * @param {number} off_current
      */
     add_relay(id, coil_positive, coil_negative, common, normally_closed, normally_open, coil_resistance_ohms, ron_ohms, roff_ohms, on_current, off_current) {
+        const val2 = +coil_positive;
+        const val3 = +coil_negative;
+        const val4 = +common;
+        const val5 = +normally_closed;
+        const val6 = +normally_open;
+        const val7 = +coil_resistance_ohms;
+        const val8 = +ron_ohms;
+        const val9 = +roff_ohms;
+        const val10 = +on_current;
+        const val11 = +off_current;
         const ptr0 = passStringToWasm0(id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
-        wasm.simulator_add_relay(this.__wbg_ptr, ptr0, len0, coil_positive, coil_negative, common, normally_closed, normally_open, coil_resistance_ohms, ron_ohms, roff_ohms, on_current, off_current);
+        wasm.simulator_add_relay(this.__wbg_ptr, ptr0, len0, val2, val3, val4, val5, val6, val7, val8, val9, val10, val11);
     }
     /**
      * @param {string} id
@@ -182,9 +218,12 @@ export class Simulator {
      * @param {number} resistance_ohms
      */
     add_resistor(id, a, b, resistance_ohms) {
+        const val2 = +a;
+        const val3 = +b;
+        const val4 = +resistance_ohms;
         const ptr0 = passStringToWasm0(id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
-        wasm.simulator_add_resistor(this.__wbg_ptr, ptr0, len0, a, b, resistance_ohms);
+        wasm.simulator_add_resistor(this.__wbg_ptr, ptr0, len0, val2, val3, val4);
     }
     /**
      * @param {string} id
@@ -194,10 +233,13 @@ export class Simulator {
      * @param {Transistor} q
      */
     add_transistor(id, base, collector, emitter, q) {
+        _assertClass(q, Transistor);
+        const val2 = +base;
+        const val3 = +collector;
+        const val4 = +emitter;
         const ptr0 = passStringToWasm0(id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
-        _assertClass(q, Transistor);
-        wasm.simulator_add_transistor(this.__wbg_ptr, ptr0, len0, base, collector, emitter, q.__wbg_ptr);
+        wasm.simulator_add_transistor(this.__wbg_ptr, ptr0, len0, val2, val3, val4, q.__wbg_ptr);
     }
     /**
      * @param {string} id
@@ -206,9 +248,12 @@ export class Simulator {
      * @param {number} voltage
      */
     add_voltage_source(id, positive_node, negative_node, voltage) {
+        const val2 = +positive_node;
+        const val3 = +negative_node;
+        const val4 = +voltage;
         const ptr0 = passStringToWasm0(id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
-        wasm.simulator_add_voltage_source(this.__wbg_ptr, ptr0, len0, positive_node, negative_node, voltage);
+        wasm.simulator_add_voltage_source(this.__wbg_ptr, ptr0, len0, val2, val3, val4);
     }
     /**
      * Build the compiled netlist + transient state.  Must be called after
@@ -332,7 +377,7 @@ export class Simulator {
         return takeFromExternrefTable0(ret[0]);
     }
     /**
-     * @param {Float64Array} v
+     * @param {Float64Array | number[]} v
      */
     import_cap_volts(v) {
         const ptr0 = passArrayF64ToWasm0(v, wasm.__wbindgen_malloc);
@@ -346,7 +391,7 @@ export class Simulator {
         wasm.simulator_import_gear2_ready(this.__wbg_ptr, ready);
     }
     /**
-     * @param {Float64Array} v
+     * @param {Float64Array | number[]} v
      */
     import_inductor_currents(v) {
         const ptr0 = passArrayF64ToWasm0(v, wasm.__wbindgen_malloc);
@@ -355,7 +400,7 @@ export class Simulator {
     }
     /**
      * Restore `node_volts`.  Silently ignored on length mismatch.
-     * @param {Float64Array} v
+     * @param {Float64Array | number[]} v
      */
     import_node_volts(v) {
         const ptr0 = passArrayF64ToWasm0(v, wasm.__wbindgen_malloc);
@@ -363,7 +408,7 @@ export class Simulator {
         wasm.simulator_import_node_volts(this.__wbg_ptr, ptr0, len0);
     }
     /**
-     * @param {Float64Array} v
+     * @param {Float64Array | number[]} v
      */
     import_prev_cap_volts(v) {
         const ptr0 = passArrayF64ToWasm0(v, wasm.__wbindgen_malloc);
@@ -377,7 +422,7 @@ export class Simulator {
         wasm.simulator_import_prev_dt(this.__wbg_ptr, dt);
     }
     /**
-     * @param {Float64Array} v
+     * @param {Float64Array | number[]} v
      */
     import_prev_inductor_currents(v) {
         const ptr0 = passArrayF64ToWasm0(v, wasm.__wbindgen_malloc);
@@ -385,7 +430,7 @@ export class Simulator {
         wasm.simulator_import_prev_inductor_currents(this.__wbg_ptr, ptr0, len0);
     }
     /**
-     * @param {Float64Array} v
+     * @param {Float64Array | number[]} v
      */
     import_prev_node_volts(v) {
         const ptr0 = passArrayF64ToWasm0(v, wasm.__wbindgen_malloc);
@@ -393,7 +438,7 @@ export class Simulator {
         wasm.simulator_import_prev_node_volts(this.__wbg_ptr, ptr0, len0);
     }
     /**
-     * @param {Uint8Array} v
+     * @param {Uint8Array | number[]} v
      */
     import_relay_active(v) {
         const ptr0 = passArray8ToWasm0(v, wasm.__wbindgen_malloc);
@@ -401,7 +446,7 @@ export class Simulator {
         wasm.simulator_import_relay_active(this.__wbg_ptr, ptr0, len0);
     }
     /**
-     * @param {Float64Array} v
+     * @param {Float64Array | number[]} v
      */
     import_tj_cap_volts(v) {
         const ptr0 = passArrayF64ToWasm0(v, wasm.__wbindgen_malloc);
@@ -425,6 +470,28 @@ export class Simulator {
         const ptr0 = passStringToWasm0(id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         const ret = wasm.simulator_inductor_current(this.__wbg_ptr, ptr0, len0);
+        return ret;
+    }
+    /**
+     * Inductor branch current by probe index (see `inductor_index`).
+     * 0.0 for an out-of-range index.
+     * @param {number} index
+     * @returns {number}
+     */
+    inductor_current_at(index) {
+        const ret = wasm.simulator_inductor_current_at(this.__wbg_ptr, index);
+        return ret;
+    }
+    /**
+     * Resolve an inductor id to a probe index for `inductor_current_at`,
+     * or `-1` if unknown / not compiled.  Valid until the next `compile()`.
+     * @param {string} id
+     * @returns {number}
+     */
+    inductor_index(id) {
+        const ptr0 = passStringToWasm0(id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.simulator_inductor_index(this.__wbg_ptr, ptr0, len0);
         return ret;
     }
     /**
@@ -554,9 +621,10 @@ export class Simulator {
      * @returns {boolean}
      */
     update_resistor(id, resistance_ohms) {
+        const val2 = +resistance_ohms;
         const ptr0 = passStringToWasm0(id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
-        const ret = wasm.simulator_update_resistor(this.__wbg_ptr, ptr0, len0, resistance_ohms);
+        const ret = wasm.simulator_update_resistor(this.__wbg_ptr, ptr0, len0, val2);
         return ret !== 0;
     }
     /**
@@ -566,9 +634,10 @@ export class Simulator {
      * @returns {boolean}
      */
     update_voltage_source(id, voltage) {
+        const val2 = +voltage;
         const ptr0 = passStringToWasm0(id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
-        const ret = wasm.simulator_update_voltage_source(this.__wbg_ptr, ptr0, len0, voltage);
+        const ret = wasm.simulator_update_voltage_source(this.__wbg_ptr, ptr0, len0, val2);
         return ret !== 0;
     }
     /**
@@ -589,6 +658,34 @@ export class Simulator {
         const ptr0 = passStringToWasm0(id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         const ret = wasm.simulator_voltage_source_current(this.__wbg_ptr, ptr0, len0);
+        return ret;
+    }
+    /**
+     * Voltage-source branch current by probe index (see
+     * `voltage_source_index`).  Same sign convention as
+     * `voltage_source_current`; 0.0 for an out-of-range index.
+     * @param {number} index
+     * @returns {number}
+     */
+    voltage_source_current_at(index) {
+        const ret = wasm.simulator_voltage_source_current_at(this.__wbg_ptr, index);
+        return ret;
+    }
+    /**
+     * Resolve a voltage source id to a stable probe index for
+     * `voltage_source_current_at`, or `-1` if unknown / not compiled.
+     *
+     * Resolve once after `compile()` and read by index in the audio loop:
+     * the `&str` overload has to UTF-8-encode the JS string into wasm
+     * memory (alloc + copy + free) and linearly scan elements on every
+     * call.  The index stays valid until the next `compile()`.
+     * @param {string} id
+     * @returns {number}
+     */
+    voltage_source_index(id) {
+        const ptr0 = passStringToWasm0(id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.simulator_voltage_source_index(this.__wbg_ptr, ptr0, len0);
         return ret;
     }
 }
@@ -849,14 +946,15 @@ if (Symbol.dispose) TransistorStamp.prototype[Symbol.dispose] = TransistorStamp.
  *
  * `marker` must be of length `n*n`.  `marker[i*n+j] != 0` means position
  * `(i,j)` may carry a non-zero value during factorization.
- * @param {Uint8Array} marker
+ * @param {Uint8Array | number[]} marker
  * @param {number} n
  * @returns {SparseLuPattern}
  */
 export function analyzePattern(marker, n) {
+    const val2 = +n;
     const ptr0 = passArray8ToWasm0(marker, wasm.__wbindgen_malloc);
     const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.analyzePattern(ptr0, len0, n);
+    const ret = wasm.analyzePattern(ptr0, len0, val2);
     return SparseLuPattern.__wrap(ret);
 }
 
@@ -867,39 +965,58 @@ export function analyzePattern(marker, n) {
  * supplied, the SPICE pnjlim limiter engages on large junction-voltage
  * swings — required for transient mode, omitted in DC operating-point.
  * @param {Diode} diode
- * @param {Float64Array} volts
+ * @param {Float64Array | number[]} volts
  * @param {number} ai
  * @param {number} ki
- * @param {Float64Array | null} [prev_volts]
+ * @param {Float64Array | number[] | null} [prev_volts]
  * @returns {DiodeStamp}
  */
 export function computeDiodeStamp(diode, volts, ai, ki, prev_volts) {
     _assertClass(diode, Diode);
-    const ptr0 = passArrayF64ToWasm0(volts, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    var ptr1 = isLikeNone(prev_volts) ? 0 : passArrayF64ToWasm0(prev_volts, wasm.__wbindgen_malloc);
-    var len1 = WASM_VECTOR_LEN;
-    const ret = wasm.computeDiodeStamp(diode.__wbg_ptr, ptr0, len0, ai, ki, ptr1, len1);
+    const val3 = +ai;
+    const val4 = +ki;
+    let ptr0, len0, ptr1, len1;
+    try {
+        ptr0 = passArrayF64ToWasm0(volts, wasm.__wbindgen_malloc);
+        len0 = WASM_VECTOR_LEN;
+        ptr1 = isLikeNone(prev_volts) ? 0 : passArrayF64ToWasm0(prev_volts, wasm.__wbindgen_malloc);
+        len1 = WASM_VECTOR_LEN;
+    } catch (e) {
+        if (ptr1) { wasm.__wbindgen_free(ptr1, len1 * 8, 8); }
+        if (ptr0) { wasm.__wbindgen_free(ptr0, len0 * 8, 8); }
+        throw e;
+    }
+    const ret = wasm.computeDiodeStamp(diode.__wbg_ptr, ptr0, len0, val3, val4, ptr1, len1);
     return DiodeStamp.__wrap(ret);
 }
 
 /**
  * Compute the transistor stamp for the current Newton iterate.
  * @param {Transistor} q
- * @param {Float64Array} volts
+ * @param {Float64Array | number[]} volts
  * @param {number} bi
  * @param {number} ci
  * @param {number} ei
- * @param {Float64Array | null} [prev_volts]
+ * @param {Float64Array | number[] | null} [prev_volts]
  * @returns {TransistorStamp}
  */
 export function computeTransistorStamp(q, volts, bi, ci, ei, prev_volts) {
     _assertClass(q, Transistor);
-    const ptr0 = passArrayF64ToWasm0(volts, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    var ptr1 = isLikeNone(prev_volts) ? 0 : passArrayF64ToWasm0(prev_volts, wasm.__wbindgen_malloc);
-    var len1 = WASM_VECTOR_LEN;
-    const ret = wasm.computeTransistorStamp(q.__wbg_ptr, ptr0, len0, bi, ci, ei, ptr1, len1);
+    const val3 = +bi;
+    const val4 = +ci;
+    const val5 = +ei;
+    let ptr0, len0, ptr1, len1;
+    try {
+        ptr0 = passArrayF64ToWasm0(volts, wasm.__wbindgen_malloc);
+        len0 = WASM_VECTOR_LEN;
+        ptr1 = isLikeNone(prev_volts) ? 0 : passArrayF64ToWasm0(prev_volts, wasm.__wbindgen_malloc);
+        len1 = WASM_VECTOR_LEN;
+    } catch (e) {
+        if (ptr1) { wasm.__wbindgen_free(ptr1, len1 * 8, 8); }
+        if (ptr0) { wasm.__wbindgen_free(ptr0, len0 * 8, 8); }
+        throw e;
+    }
+    const ret = wasm.computeTransistorStamp(q.__wbg_ptr, ptr0, len0, val3, val4, val5, ptr1, len1);
     return TransistorStamp.__wrap(ret);
 }
 
@@ -912,16 +1029,17 @@ export function computeTransistorStamp(q, volts, bi, ci, ei, prev_volts) {
  * Returns the elimination order: `order[k] = i` means "eliminate row i at
  * step k".
  * @param {number} n
- * @param {Int32Array} flat_edges
+ * @param {Int32Array | number[]} flat_edges
  * @returns {Int32Array}
  */
 export function minimumDegreeOrder(n, flat_edges) {
+    const val2 = +n;
     const ptr0 = passArray32ToWasm0(flat_edges, wasm.__wbindgen_malloc);
     const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.minimumDegreeOrder(n, ptr0, len0);
-    var v2 = getArrayI32FromWasm0(ret[0], ret[1]).slice();
+    const ret = wasm.minimumDegreeOrder(val2, ptr0, len0);
+    var v3 = getArrayI32FromWasm0(ret[0], ret[1]).slice();
     wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
-    return v2;
+    return v3;
 }
 
 /**
@@ -936,126 +1054,135 @@ export function minimumDegreeOrder(n, flat_edges) {
  * @returns {boolean}
  */
 export function numericFactor(mat, n, pat) {
+    _assertClass(pat, SparseLuPattern);
+    const val2 = +n;
     var ptr0 = passArrayF64ToWasm0(mat, wasm.__wbindgen_malloc);
     var len0 = WASM_VECTOR_LEN;
-    _assertClass(pat, SparseLuPattern);
-    const ret = wasm.numericFactor(ptr0, len0, mat, n, pat.__wbg_ptr);
+    const ret = wasm.numericFactor(ptr0, len0, mat, val2, pat.__wbg_ptr);
     return ret !== 0;
 }
 
 /**
  * Solve `(L * U) * x = rhs` using a matrix already factored by
  * `numeric_factor`.  The solution overwrites `rhs` on return.
- * @param {Float64Array} mat
+ * @param {Float64Array | number[]} mat
  * @param {Float64Array} rhs
  * @param {number} n
  * @param {SparseLuPattern} pat
  */
 export function sparseSolveInPlace(mat, rhs, n, pat) {
-    const ptr0 = passArrayF64ToWasm0(mat, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    var ptr1 = passArrayF64ToWasm0(rhs, wasm.__wbindgen_malloc);
-    var len1 = WASM_VECTOR_LEN;
     _assertClass(pat, SparseLuPattern);
-    wasm.sparseSolveInPlace(ptr0, len0, ptr1, len1, rhs, n, pat.__wbg_ptr);
+    const val3 = +n;
+    let ptr0, len0, ptr1, len1;
+    try {
+        ptr0 = passArrayF64ToWasm0(mat, wasm.__wbindgen_malloc);
+        len0 = WASM_VECTOR_LEN;
+        ptr1 = passArrayF64ToWasm0(rhs, wasm.__wbindgen_malloc);
+        len1 = WASM_VECTOR_LEN;
+    } catch (e) {
+        if (ptr1) { wasm.__wbindgen_free(ptr1, len1 * 8, 8); }
+        if (ptr0) { wasm.__wbindgen_free(ptr0, len0 * 8, 8); }
+        throw e;
+    }
+    wasm.sparseSolveInPlace(ptr0, len0, ptr1, len1, rhs, val3, pat.__wbg_ptr);
 }
 function __wbg_get_imports() {
     const import0 = {
         __proto__: null,
-        __wbg_Error_bce6d499ff0a4aff: function(arg0, arg1) {
+        __wbg_Error_208446807d0d1e30: function(arg0, arg1) {
             const ret = Error(getStringFromWasm0(arg0, arg1));
             return ret;
         },
-        __wbg_Number_b7972a139bfbfdf0: function(arg0) {
+        __wbg_Number_ff192a72a0dcdf6d: function(arg0) {
             const ret = Number(arg0);
             return ret;
         },
-        __wbg___wbindgen_boolean_get_2304fb8c853028c8: function(arg0) {
+        __wbg___wbindgen_boolean_get_4f1baf9a00be3c74: function(arg0) {
             const v = arg0;
             const ret = typeof(v) === 'boolean' ? v : undefined;
             return isLikeNone(ret) ? 0xFFFFFF : ret ? 1 : 0;
         },
-        __wbg___wbindgen_copy_to_typed_array_787746aeb47818bc: function(arg0, arg1, arg2) {
+        __wbg___wbindgen_copy_to_typed_array_680b191e71920dc1: function(arg0, arg1, arg2) {
             new Uint8Array(arg2.buffer, arg2.byteOffset, arg2.byteLength).set(getArrayU8FromWasm0(arg0, arg1));
         },
-        __wbg___wbindgen_debug_string_edece8177ad01481: function(arg0, arg1) {
+        __wbg___wbindgen_debug_string_f249a2a76caa9a55: function(arg0, arg1) {
             const ret = debugString(arg1);
             const ptr1 = passStringToWasm0(ret, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len1 = WASM_VECTOR_LEN;
-            getDataViewMemory0().setInt32(arg0 + 4 * 1, len1, true);
-            getDataViewMemory0().setInt32(arg0 + 4 * 0, ptr1, true);
+            getDataViewMemory0().setInt32((arg0 >>> 0) + 4 * 1, len1, true);
+            getDataViewMemory0().setInt32((arg0 >>> 0) + 4 * 0, ptr1, true);
         },
-        __wbg___wbindgen_in_07056af4f902c445: function(arg0, arg1) {
+        __wbg___wbindgen_in_3f58a9d3b3a7eed2: function(arg0, arg1) {
             const ret = arg0 in arg1;
             return ret;
         },
-        __wbg___wbindgen_is_function_5cd60d5cf78b4eef: function(arg0) {
+        __wbg___wbindgen_is_function_741ff2bb612836f5: function(arg0) {
             const ret = typeof(arg0) === 'function';
             return ret;
         },
-        __wbg___wbindgen_is_object_b4593df85baada48: function(arg0) {
+        __wbg___wbindgen_is_object_8b968c3ab8e96595: function(arg0) {
             const val = arg0;
             const ret = typeof(val) === 'object' && val !== null;
             return ret;
         },
-        __wbg___wbindgen_is_string_dde0fd9020db4434: function(arg0) {
+        __wbg___wbindgen_is_string_fc456fee5d3317de: function(arg0) {
             const ret = typeof(arg0) === 'string';
             return ret;
         },
-        __wbg___wbindgen_is_undefined_35bb9f4c7fd651d5: function(arg0) {
+        __wbg___wbindgen_is_undefined_be5b34249ff1fc15: function(arg0) {
             const ret = arg0 === undefined;
             return ret;
         },
-        __wbg___wbindgen_jsval_loose_eq_0ad77b7717db155c: function(arg0, arg1) {
+        __wbg___wbindgen_jsval_loose_eq_b2f214e2e4b30e36: function(arg0, arg1) {
             const ret = arg0 == arg1;
             return ret;
         },
-        __wbg___wbindgen_number_get_f73a1244370fcc2c: function(arg0, arg1) {
+        __wbg___wbindgen_number_get_934b640d0889af78: function(arg0, arg1) {
             const obj = arg1;
             const ret = typeof(obj) === 'number' ? obj : undefined;
-            getDataViewMemory0().setFloat64(arg0 + 8 * 1, isLikeNone(ret) ? 0 : ret, true);
-            getDataViewMemory0().setInt32(arg0 + 4 * 0, !isLikeNone(ret), true);
+            getDataViewMemory0().setFloat64((arg0 >>> 0) + 8 * 1, isLikeNone(ret) ? 0 : ret, true);
+            getDataViewMemory0().setInt32((arg0 >>> 0) + 4 * 0, !isLikeNone(ret), true);
         },
-        __wbg___wbindgen_string_get_d109740c0d18f4d7: function(arg0, arg1) {
+        __wbg___wbindgen_string_get_7ce8eee7fd327545: function(arg0, arg1) {
             const obj = arg1;
             const ret = typeof(obj) === 'string' ? obj : undefined;
             var ptr1 = isLikeNone(ret) ? 0 : passStringToWasm0(ret, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             var len1 = WASM_VECTOR_LEN;
-            getDataViewMemory0().setInt32(arg0 + 4 * 1, len1, true);
-            getDataViewMemory0().setInt32(arg0 + 4 * 0, ptr1, true);
+            getDataViewMemory0().setInt32((arg0 >>> 0) + 4 * 1, len1, true);
+            getDataViewMemory0().setInt32((arg0 >>> 0) + 4 * 0, ptr1, true);
         },
-        __wbg___wbindgen_throw_9c31b086c2b26051: function(arg0, arg1) {
+        __wbg___wbindgen_throw_4c88d8bf264fd984: function(arg0, arg1) {
             throw new Error(getStringFromWasm0(arg0, arg1));
         },
-        __wbg_call_13665d9f14390edc: function() { return handleError(function (arg0, arg1) {
+        __wbg_call_40b008ba32f73991: function() { return handleError(function (arg0, arg1) {
             const ret = arg0.call(arg1);
             return ret;
         }, arguments); },
-        __wbg_done_54b8da57023b7ed2: function(arg0) {
+        __wbg_done_57e08d0be6e30c02: function(arg0) {
             const ret = arg0.done;
             return ret;
         },
-        __wbg_entries_564a7e8b1e54ede5: function(arg0) {
+        __wbg_entries_7bb1459bd9b5c2b9: function(arg0) {
             const ret = Object.entries(arg0);
             return ret;
         },
-        __wbg_get_3e9a707ab7d352eb: function() { return handleError(function (arg0, arg1) {
+        __wbg_get_635eea311fa1a291: function() { return handleError(function (arg0, arg1) {
             const ret = Reflect.get(arg0, arg1);
             return ret;
         }, arguments); },
-        __wbg_get_98fdf51d029a75eb: function(arg0, arg1) {
+        __wbg_get_d7176cfb76d71114: function(arg0, arg1) {
             const ret = arg0[arg1 >>> 0];
             return ret;
         },
-        __wbg_get_unchecked_1dfe6d05ad91d9b7: function(arg0, arg1) {
+        __wbg_get_unchecked_e6325ad374eff861: function(arg0, arg1) {
             const ret = arg0[arg1 >>> 0];
             return ret;
         },
-        __wbg_get_with_ref_key_6412cf3094599694: function(arg0, arg1) {
+        __wbg_get_with_ref_key_fc601247060b7204: function(arg0, arg1) {
             const ret = arg0[arg1];
             return ret;
         },
-        __wbg_instanceof_ArrayBuffer_53db37b06f6b9afe: function(arg0) {
+        __wbg_instanceof_ArrayBuffer_12cdaa4161423e6b: function(arg0) {
             let result;
             try {
                 result = arg0 instanceof ArrayBuffer;
@@ -1065,7 +1192,7 @@ function __wbg_get_imports() {
             const ret = result;
             return ret;
         },
-        __wbg_instanceof_Uint8Array_abd07d4bd221d50b: function(arg0) {
+        __wbg_instanceof_Uint8Array_d7aeb0dcb3108fea: function(arg0) {
             let result;
             try {
                 result = arg0 instanceof Uint8Array;
@@ -1075,77 +1202,76 @@ function __wbg_get_imports() {
             const ret = result;
             return ret;
         },
-        __wbg_isArray_94898ed3aad6947b: function(arg0) {
+        __wbg_isArray_bcf1376d0d732d08: function(arg0) {
             const ret = Array.isArray(arg0);
             return ret;
         },
-        __wbg_isSafeInteger_01e964d144ad3a55: function(arg0) {
+        __wbg_isSafeInteger_1a35ba4d31e71d38: function(arg0) {
             const ret = Number.isSafeInteger(arg0);
             return ret;
         },
-        __wbg_iterator_1441b47f341dc34f: function() {
+        __wbg_iterator_e4c5e8f68ada7b58: function() {
             const ret = Symbol.iterator;
             return ret;
         },
-        __wbg_length_2591a0f4f659a55c: function(arg0) {
+        __wbg_length_186163212ffe79c3: function(arg0) {
             const ret = arg0.length;
             return ret;
         },
-        __wbg_length_56fcd3e2b7e0299d: function(arg0) {
+        __wbg_length_b03a0fabb109b1e9: function(arg0) {
             const ret = arg0.length;
             return ret;
         },
-        __wbg_new_02d162bc6cf02f60: function() {
-            const ret = new Object();
-            return ret;
-        },
-        __wbg_new_310879b66b6e95e1: function() {
-            const ret = new Array();
-            return ret;
-        },
-        __wbg_new_7ddec6de44ff8f5d: function(arg0) {
+        __wbg_new_13de428334042d26: function(arg0) {
             const ret = new Uint8Array(arg0);
             return ret;
         },
-        __wbg_next_2a4e19f4f5083b0f: function(arg0) {
+        __wbg_new_37eb45aaf5eeb820: function() {
+            const ret = new Array();
+            return ret;
+        },
+        __wbg_new_cd4348290afae586: function() {
+            const ret = new Object();
+            return ret;
+        },
+        __wbg_next_178c1651c11432b3: function(arg0) {
             const ret = arg0.next;
             return ret;
         },
-        __wbg_next_6429a146bf756f93: function() { return handleError(function (arg0) {
+        __wbg_next_af5ac6a08bb0a717: function() { return handleError(function (arg0) {
             const ret = arg0.next();
             return ret;
         }, arguments); },
-        __wbg_prototypesetcall_5f9bdc8d75e07276: function(arg0, arg1, arg2) {
+        __wbg_prototypesetcall_13162965d1fe7aa3: function(arg0, arg1, arg2) {
             Uint8Array.prototype.set.call(getArrayU8FromWasm0(arg0, arg1), arg2);
         },
-        __wbg_set_6be42768c690e380: function(arg0, arg1, arg2) {
-            arg0[arg1] = arg2;
-        },
-        __wbg_set_78ea6a19f4818587: function(arg0, arg1, arg2) {
+        __wbg_set_d2d33b52458e984a: function(arg0, arg1, arg2) {
             arg0[arg1 >>> 0] = arg2;
         },
-        __wbg_value_9cc0518af87a489c: function(arg0) {
+        __wbg_set_e4b9a833d288759a: function(arg0, arg1, arg2) {
+            arg0[arg1] = arg2;
+        },
+        __wbg_value_e0f328965e184931: function(arg0) {
             const ret = arg0.value;
             return ret;
         },
-        __wbindgen_cast_0000000000000001: function(arg0) {
+        __wbindgen_generic_0000000000000001: function(arg0) {
             // Cast intrinsic for `F64 -> Externref`.
             const ret = arg0;
             return ret;
         },
-        __wbindgen_cast_0000000000000002: function(arg0, arg1) {
+        __wbindgen_generic_0000000000000002: function(arg0, arg1) {
             // Cast intrinsic for `Ref(String) -> Externref`.
             const ret = getStringFromWasm0(arg0, arg1);
             return ret;
         },
         __wbindgen_init_externref_table: function() {
             const table = wasm.__wbindgen_externrefs;
-            const offset = table.grow(4);
             table.set(0, undefined);
-            table.set(offset + 0, undefined);
-            table.set(offset + 1, null);
-            table.set(offset + 2, true);
-            table.set(offset + 3, false);
+            table.set(1024, undefined);
+            table.set(1025, null);
+            table.set(1026, true);
+            table.set(1027, false);
         },
     };
     return {
@@ -1189,68 +1315,61 @@ function _assertClass(instance, klass) {
 }
 
 function debugString(val) {
-    // primitive types
-    const type = typeof val;
-    if (type == 'number' || type == 'boolean' || val == null) {
-        return  `${val}`;
-    }
-    if (type == 'string') {
-        return `"${val}"`;
-    }
-    if (type == 'symbol') {
-        const description = val.description;
-        if (description == null) {
-            return 'Symbol';
-        } else {
-            return `Symbol(${description})`;
+    switch (typeof val) {
+        // primitive types
+        case 'number':
+        case 'boolean':
+        case 'undefined':
+        return `${val}`;
+        case 'string':
+        return JSON.stringify(val);
+        case 'bigint':
+        return `${val}n`;
+        case 'symbol':
+        return val.description !== undefined
+            ? `Symbol(${val.description})`
+            : 'Symbol';
+        case 'function':
+        return typeof val.name === 'string' && val.name !== ''
+            ? `Function(${val.name})`
+            : 'Function';
+        case 'object': {
+            if (val === null) {
+                return 'null';
+            }
+            // objects
+            if (Array.isArray(val)) {
+                return '[' + Array.from(val, debugString).join(', ') + ']';
+            }
+            // errors
+            if (val instanceof Error) {
+                return `${val.name}: ${val.message}\n${val.stack}`;
+            }
+
+            const toStringOutput = toString.call(val);
+            // Test for built-in
+            const className = /\[object ([^\]]+)\]/.exec(toStringOutput)?.[1];
+
+            // Failed to match the standard '[object ClassName]'
+            if (className === undefined) {
+                return toStringOutput;
+            }
+            if (className === 'Object') {
+                // we're a user defined class or Object
+                // JSON.stringify avoids problems with cycles, and is generally much
+                // easier than looping through ownProperties of `val`.
+                try {
+                    return 'Object(' + JSON.stringify(val) + ')';
+                } catch (_) {
+                    return 'Object';
+                }
+            }
+            // TODO we could test for more things here, like `Set`s and `Map`s.
+            return className;
         }
+        // Per MDN: 'This list of values is exhaustive.'
+        // https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Operators/typeof#description
     }
-    if (type == 'function') {
-        const name = val.name;
-        if (typeof name == 'string' && name.length > 0) {
-            return `Function(${name})`;
-        } else {
-            return 'Function';
-        }
-    }
-    // objects
-    if (Array.isArray(val)) {
-        const length = val.length;
-        let debug = '[';
-        if (length > 0) {
-            debug += debugString(val[0]);
-        }
-        for(let i = 1; i < length; i++) {
-            debug += ', ' + debugString(val[i]);
-        }
-        debug += ']';
-        return debug;
-    }
-    // Test for built-in
-    const builtInMatches = /\[object ([^\]]+)\]/.exec(toString.call(val));
-    let className;
-    if (builtInMatches && builtInMatches.length > 1) {
-        className = builtInMatches[1];
-    } else {
-        // Failed to match the standard '[object ClassName]'
-        return toString.call(val);
-    }
-    if (className == 'Object') {
-        // we're a user defined class or Object
-        // JSON.stringify avoids problems with cycles, and is generally much
-        // easier than looping through ownProperties of `val`.
-        try {
-            return 'Object(' + JSON.stringify(val) + ')';
-        } catch (_) {
-            return 'Object';
-        }
-    }
-    // errors
-    if (val instanceof Error) {
-        return `${val.name}: ${val.message}\n${val.stack}`;
-    }
-    // TODO we could test for more things here, like `Set`s and `Map`s.
-    return className;
 }
 
 function getArrayF64FromWasm0(ptr, len) {
@@ -1293,7 +1412,8 @@ function getInt32ArrayMemory0() {
 }
 
 function getStringFromWasm0(ptr, len) {
-    return decodeText(ptr >>> 0, len);
+    ptr = ptr >>> 0;
+    return decodeText(getUint8ArrayMemory0().subarray(ptr, ptr + len));
 }
 
 let cachedUint32ArrayMemory0 = null;
@@ -1389,18 +1509,18 @@ function takeFromExternrefTable0(idx) {
     return value;
 }
 
-let cachedTextDecoder = new TextDecoder('utf-8', { ignoreBOM: true, fatal: true });
+let cachedTextDecoder = new TextDecoder('utf-8', { ignoreBOM: true });
 cachedTextDecoder.decode();
 const MAX_SAFARI_DECODE_BYTES = 2146435072;
 let numBytesDecoded = 0;
-function decodeText(ptr, len) {
-    numBytesDecoded += len;
+function decodeText(bytes) {
+    numBytesDecoded += bytes.length;
     if (numBytesDecoded >= MAX_SAFARI_DECODE_BYTES) {
-        cachedTextDecoder = new TextDecoder('utf-8', { ignoreBOM: true, fatal: true });
+        cachedTextDecoder = new TextDecoder('utf-8', { ignoreBOM: true });
         cachedTextDecoder.decode();
-        numBytesDecoded = len;
+        numBytesDecoded = bytes.length;
     }
-    return cachedTextDecoder.decode(getUint8ArrayMemory0().subarray(ptr, ptr + len));
+    return cachedTextDecoder.decode(bytes);
 }
 
 const cachedTextEncoder = new TextEncoder();
@@ -1434,11 +1554,15 @@ function __wbg_finalize_init(instance, module) {
 
 async function __wbg_load(module, imports) {
     if (typeof Response === 'function' && module instanceof Response) {
+        if (!module.ok) {
+            throw new Error(`failed to fetch Wasm: ${module.status} ${module.statusText} fetching '${module.url}'`);
+        }
+
         if (typeof WebAssembly.instantiateStreaming === 'function') {
             try {
                 return await WebAssembly.instantiateStreaming(module, imports);
             } catch (e) {
-                const validResponse = module.ok && expectedResponseType(module.type);
+                const validResponse = expectedResponseType(module.type);
 
                 if (validResponse && module.headers.get('Content-Type') !== 'application/wasm') {
                     console.warn("`WebAssembly.instantiateStreaming` failed because your server does not serve Wasm with `application/wasm` MIME type. Falling back to `WebAssembly.instantiate` which is slower. Original error:\n", e);
@@ -1487,9 +1611,17 @@ function initSync(module) {
     return __wbg_finalize_init(instance, module);
 }
 
+let __wbg_init_promise;
 async function __wbg_init(module_or_path) {
     if (wasm !== undefined) return wasm;
+    if (__wbg_init_promise === undefined) {
+        __wbg_init_promise = __wbg_init_once(module_or_path);
+        __wbg_init_promise.catch(() => { __wbg_init_promise = undefined; });
+    }
+    return __wbg_init_promise;
+}
 
+async function __wbg_init_once(module_or_path) {
 
     if (module_or_path !== undefined) {
         if (Object.getPrototypeOf(module_or_path) === Object.prototype) {
