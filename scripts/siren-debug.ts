@@ -4,16 +4,12 @@
  *
  * Run: bun scripts/siren-debug.ts
  */
+import './wasm-node';
 import { KIT_COMPONENTS } from '../src/lib';
-import {
-	buildCircuitTopology,
-	buildSimulationNetlist,
-	solveDcNetlist,
-	compileNetlist,
-	initializeTransientState,
-	stepTransientNetlist
-} from '../src/lib';
+import { buildCircuitTopology, buildSimulationNetlist } from '../src/lib';
 import type { Wire } from '../src/lib';
+import { solveDcWasm } from '#lib/sim/dc-wasm';
+import { WasmTransientSimulator } from '#lib/sim/transient-wasm';
 
 // P18-Siren wiring (from Circuits/P18-Siren.txt)
 function makeWires(keyOpen: boolean): Wire[] {
@@ -85,7 +81,7 @@ function runAnalysis(keyLabel: string, keyOpen: boolean) {
 	console.log('  Elements:', netlist.elements.map(e => e.componentId ?? e.type).join(', '));
 
 	// DC solve
-	const dc = solveDcNetlist(netlist);
+	const dc = solveDcWasm(netlist);
 	console.log(`\nDC solve: ok=${dc.ok}`);
 	if (!dc.ok) { console.log(`  Issue: ${dc.issue?.message}`); return; }
 	if (dc.warnings.length) console.log(`  Warnings: ${dc.warnings.map(w=>w.message).join('; ')}`);
@@ -104,27 +100,25 @@ function runAnalysis(keyLabel: string, keyOpen: boolean) {
 	console.log(`  NodeD(C6top)=${vD.toFixed(4)}V`);
 	console.log(`  NodeE(Q3base)=${vE.toFixed(4)}V  (Vbe_Q3=${vE.toFixed(4)}V)`);
 
-	// Transient: 200ms simulation, sample speaker every 5ms
-	const compiled = compileNetlist(netlist);
-	if (!compiled) { console.log('  compileNetlist failed'); return; }
+	// Transient: start from the DC operating point on a fresh simulator.
+	const sim = WasmTransientSimulator.fromNetlist(netlist);
+	if (!sim) { console.log('  failed to build simulator'); return; }
+	if (!sim.solveDc()) { console.log('  simulator DC solve failed'); sim.dispose(); return; }
 
-	let state = initializeTransientState(netlist, dc.ok ? dc.nodeVoltages : undefined);
 	console.log('\nInitial capacitor voltages (from DC):');
-	for (const [id, v] of Object.entries(state.capacitorVoltages)) {
-		console.log(`  ${id}: ${v.toFixed(6)}V`);
+	for (const el of netlist.elements) {
+		if (el.type !== 'capacitor') continue;
+		const v = sim.nodeVoltage(el.nodes[0]) - sim.nodeVoltage(el.nodes[1]);
+		console.log(`  ${el.componentId}: ${v.toFixed(6)}V`);
 	}
 
 	// Apply a fixed (not random) startup kick for reproducibility
-	const kickedVoltages: Record<string, number> = {};
-	for (const [id, v] of Object.entries(state.capacitorVoltages)) {
-		kickedVoltages[id] = v + 0.005; // fixed +5mV kick
-	}
-	state = { ...state, capacitorVoltages: kickedVoltages };
+	const snap = sim.exportState();
+	snap.capVolts = snap.capVolts.map((v) => v + 0.005); // fixed +5mV kick
+	sim.importState(snap);
 
-	const DT_INIT = 10e-6;
-	const DT_MIN  = 1e-6;
-	const DT_MAX  = 0.5e-3;
-	let dt = DT_INIT;
+	// Fixed step (the WASM wrapper doesn't expose a recommended dt).
+	const dt = 10e-6;
 
 	const SIM_DURATION_S = 0.5; // 500ms
 	const SAMPLE_EVERY_S = 0.01; // print every 10ms
@@ -139,18 +133,17 @@ function runAnalysis(keyLabel: string, keyOpen: boolean) {
 
 	while (simTime < SIM_DURATION_S) {
 		const stepDt = Math.min(dt, SIM_DURATION_S - simTime);
-		const result = stepTransientNetlist(netlist, state, { dt: stepDt, gear: 2 }, compiled);
+		const result = sim.stepBdf2(stepDt);
 		if (!result.ok) {
-			console.log(`  FAILED at t=${simTime.toFixed(4)}s: ${result.issue?.message}`);
+			console.log(`  FAILED at t=${simTime.toFixed(4)}s: ${result.issue}`);
 			break;
 		}
-		state = result.state;
 		simTime += stepDt;
 		steps++;
 
-		const rA = result.nodeVoltages[nodeA_id!] ?? 0;
-		const rB = result.nodeVoltages[nodeB_id!] ?? 0;
-		const rE = result.nodeVoltages[nodeE_id!] ?? 0;
+		const rA = sim.nodeVoltage(nodeA_id!);
+		const rB = sim.nodeVoltage(nodeB_id!);
+		const rE = sim.nodeVoltage(nodeE_id!);
 
 		// Speaker voltage = NodeA (SPK1 terminal 90 = NodeA, terminal 91 = GND)
 		const spkV = rA; // voltage across speaker
@@ -162,12 +155,9 @@ function runAnalysis(keyLabel: string, keyOpen: boolean) {
 			console.log(`  ${(simTime*1000).toFixed(1).padStart(8)}ms  ${rA.toFixed(4)}V  ${rB.toFixed(4)}V  ${rE.toFixed(4)}V  ${(spkV*1000).toFixed(2).padStart(8)}mV  ${(dt*1e6).toFixed(0)}µs`);
 			nextPrint += SAMPLE_EVERY_S;
 		}
-
-		if (result.recommendedDt !== undefined) {
-			dt = Math.max(DT_MIN, Math.min(DT_MAX, result.recommendedDt));
-		}
 	}
 
+	sim.dispose();
 	console.log(`\nSummary: ${steps} steps, maxNodeA=${maxNodeA.toFixed(6)}V, maxSpkV=${(maxSpkV*1000).toFixed(3)}mV`);
 }
 

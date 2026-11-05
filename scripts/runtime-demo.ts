@@ -1,5 +1,7 @@
+import './wasm-node';
 import { KIT_COMPONENTS } from '../src/lib';
-import { buildSimulationNetlist, buildCircuitTopology, solveDcNetlist } from '../src/lib';
+import { buildSimulationNetlist, buildCircuitTopology } from '../src/lib';
+import { solveDcWasm } from '#lib/sim/dc-wasm';
 import type { Wire } from '../src/lib';
 
 const demoWires: Wire[] = [
@@ -11,7 +13,7 @@ const demoWires: Wire[] = [
 
 const topology = buildCircuitTopology(demoWires, KIT_COMPONENTS);
 const netlist = buildSimulationNetlist(topology, KIT_COMPONENTS);
-const dc = solveDcNetlist(netlist);
+const dc = solveDcWasm(netlist);
 
 console.log('Runtime netlist demo');
 console.log('-------------------');
